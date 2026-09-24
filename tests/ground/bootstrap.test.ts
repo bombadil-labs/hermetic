@@ -33,6 +33,10 @@ describe("loading a ground bootstrap", () => {
     expect(summary(load(fixture("jsdoc.ground.ts")))).toEqual({ names: ["Map"], deny: [] });
   });
 
+  it("erases TypeScript syntax before running the bootstrap", () => {
+    expect(summary(load(fixture("typed.ground.ts")))).toEqual({ names: ["JSON", "Math", "twice"], deny: ["Math.random"] });
+  });
+
   it("loads plain JavaScript", () => {
     expect(summary(load(fixture("plain.ground.mjs")))).toEqual({ names: ["Math", "Set"], deny: ["Math.random"] });
   });
@@ -64,8 +68,18 @@ describe("refusing a ground bootstrap", () => {
   it("even when the problem is suppressed with an eslint-disable comment", () =>
     refuses("suppressed.ground.ts", /'extra' is a free variable/));
 
-  it("when the bootstrap throws", () => refuses("throws.ground.ts", /threw: no ground today/));
-  it("when the bootstrap does not return in time", () => refuses("loops.ground.ts", /threw: Script execution timed out/));
+  it("when the bootstrap throws, pointing at the throw", () =>
+    refuses("throws.ground.ts", /threw at .*throws\.ground\.ts:3:9: no ground today/));
+
+  it("when the bootstrap throws on its first line, with the column in the original file", () => {
+    const file = fixture("throws-first-line.ground.ts");
+    const column = fs.readFileSync(file, "utf8").indexOf("new Error") + 1;
+    expect(() => load(file)).toThrow(new RegExp(`threw at .*throws-first-line\\.ground\\.ts:1:${column}: early`));
+  });
+
+  it("when the bootstrap does not return in time", () => refuses("loops.ground.ts", /did not return within 1000ms/));
+  it("when the bootstrap uses syntax that cannot be erased", () =>
+    refuses("enum.ground.ts", /An enum cannot be erased to plain JavaScript.*enum\.ground\.ts:3:3/));
   it("when the bootstrap returns a promise", () => refuses("async.ground.ts", /must return its ground synchronously/));
   it("when the bootstrap compiles strings", () => refuses("codegen.ground.ts", /Code generation from strings disallowed/));
   it("when allow is not an object", () => refuses("bad-shape.ground.ts", /must return an allow object/));

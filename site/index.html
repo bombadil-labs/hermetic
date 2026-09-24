@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hermetic functions</title>
+    <meta
+      name="description"
+      content="An ESLint plugin for functions that touch the world only through their arguments and this: checked in your source, applied to a whole codebase in one command, and erased from your build."
+    />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <!-- header -->
+
+    <main>
+      <section class="hero">
+        <div class="wrap">
+          <p class="eyebrow">An ESLint plugin for TypeScript and JavaScript</p>
+          <h1>Hermetic functions</h1>
+          <p class="lede">
+            A hermetic function depends only on <strong>what it is handed</strong>: its arguments, <code>this</code>, and a
+            small, explicit ground of harmless globals. It may still mutate and cause effects, but only through what it was
+            handed. So everything it can touch is visible at the call.
+          </p>
+          <div class="actions">
+            <span class="install"><code>npm install --save-dev @bombadil/hermetic</code><button type="button" data-copy="npm install --save-dev @bombadil/hermetic">Copy</button></span>
+            <a class="button primary" href="#case-studies">Read the case studies</a>
+            <a class="button" href="https://github.com/bombadil-labs/hermetic">GitHub</a>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="wrap split">
+          <div class="prose">
+            <h2>Two doors</h2>
+            <p>
+              A hermetic function's whole world arrives through its arguments and <code>this</code>. The rule,
+              <code>hermetic/sealed</code>, reports everything else it reaches for: a module constant, an import, a global,
+              <code>Math.random</code>.
+            </p>
+            <p>
+              Authority is granted in a thin <em>binding layer</em>, ordinary code that builds <code>this</code> and applies
+              it. TypeScript already checks it: a <code>this</code> parameter is typed at every <code>.call</code>,
+              <code>.apply</code> and <code>.bind</code>.
+            </p>
+            <p class="not">
+              <strong>Hermetic is not pure.</strong> Purity cannot be enforced in JavaScript: any argument can be a Proxy, or
+              carry a getter that does I/O. Hermeticity can. "No free variables" is a syntactic fact that ESLint's scope
+              analysis already computes.
+            </p>
+          </div>
+          <div>
+            <pre data-lang="ts">function applyDiscount(this: PricingCtx, invoice: Invoice): Invoice {
+  "use hermetic";
+  return { ...invoice, total: this.clamp(invoice.total * (1 - this.rate)) };
+}
+
+// The binding layer: the one place authority is granted.
+const pricing: PricingCtx = { rate: config.discountRate, clamp: clampToCents };
+export const applyPricing = applyDiscount.bind(pricing);</pre>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="wrap">
+          <div class="section-head">
+            <h2>What two doors buy you</h2>
+            <p>Anything standing at the doors sees everything the function can do.</p>
+          </div>
+          <div class="cards">
+            <div class="card">
+              <h3>Relocation</h3>
+              <p>
+                Move it to another file, a worker or a realm, unchanged. The acid test:
+                <code>new Function("return " + fn.toString())()</code> behaves identically to <code>fn</code>.
+              </p>
+            </div>
+            <div class="card">
+              <h3>Mocks, traces, replays</h3>
+              <p>Wrap <code>this</code> in a Proxy and you have a complete log of every effect the function can have, with no instrumentation inside it.</p>
+            </div>
+            <div class="card">
+              <h3>Authority audits</h3>
+              <p>Every grant lives in the binding layer, so "what can touch Stripe?" is answered by reading the wiring.</p>
+            </div>
+            <div class="card">
+              <h3>Context-complete units</h3>
+              <p>Arguments, the <code>this</code> type and the body are everything an agent or a reviewer needs to change the function safely.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="wrap">
+          <div class="section-head">
+            <h2>Make a codebase hermetic in one command</h2>
+            <p>
+              <code>hermetic/prefer-hermetic</code> marks the functions that are hermetic already. With <code>lift</code>,
+              it splits the rest: the body moves into a hermetic core, and the original name becomes a binding that hands
+              the core exactly what it used to take from its surroundings. Callers do not change.
+            </p>
+          </div>
+          <pre data-lang="sh">npx eslint --fix --rule '{"hermetic/prefer-hermetic": ["warn", {"lift": true}]}' src/</pre>
+          <!-- example @tanstack/query-core/src/utils.ts#hashQueryKeyByOptions -->
+          <div class="stats">
+            <div class="stat"><span class="value">{{total.candidates}}</span><span class="label">functions in Effect, RxJS and TanStack Query</span></div>
+            <div class="stat"><span class="value">{{total.hermeticPct}}</span><span class="label">already hermetic: marked</span></div>
+            <div class="stat"><span class="value">{{total.liftedPct}}</span><span class="label">lifted into a hermetic core</span></div>
+            <div class="stat"><span class="value">{{total.typeErrorsIntroduced}}</span><span class="label">new type errors</span></div>
+          </div>
+          <p class="prose">
+            The fix applies only where the split cannot change behavior or types, and leaves the rest, with a reason, for a
+            person. On Effect, the library's own test suite passes on its lifted source: {{effect.suite.lifted.passed}} tests, {{effect.suite.lifted.failed}} failures.
+          </p>
+        </div>
+      </section>
+
+      <section>
+        <div class="wrap split">
+          <div class="prose">
+            <h2>Checked in the source, erased in the build</h2>
+            <p>
+              A lifted function costs one more call and a few property reads each time it runs. The lift has an exact
+              inverse, <code>unlift</code>, which folds every binding back into the function it came from. The source stays
+              hermetic, checked and testable; the build ships the original code.
+            </p>
+            <p>
+              Unlifting the lifted corpus gives back the original program in every file, and Effect's
+              {{effect.suite.unlifted.passed}} tests pass on its unlifted source too.
+            </p>
+          </div>
+          <div>
+            <!-- bench -->
+          </div>
+        </div>
+      </section>
+
+      <section id="case-studies">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>Case studies</h2>
+            <p>
+              The plugin, run against three large open-source libraries, with every number reproducible from this
+              repository.
+            </p>
+          </div>
+          <div class="cards">
+            <a class="card link" href="case-studies/effect.html">
+              <span class="kicker">Effect {{effect.version}}</span>
+              <h3>{{effect.lifted}} functions lifted, every test still green</h3>
+              <p>A functional runtime, split and folded back. What the test suite caught that types did not, and what that did to the design.</p>
+              <span class="more">Read the Effect case study →</span>
+            </a>
+            <a class="card link" href="case-studies/rxjs.html">
+              <span class="kicker">RxJS {{rxjs.version}}</span>
+              <h3>Why {{rxjs.hoistedSkipped}} operators were left alone</h3>
+              <p>Hoisted declarations, import cycles, and the cost of being exact. What one opt-in would change.</p>
+              <span class="more">Read the RxJS case study →</span>
+            </a>
+            <a class="card link" href="case-studies/tanstack-query.html">
+              <span class="kicker">TanStack Query {{tanstack.version}}</span>
+              <h3>{{tanstack.hermeticPct}} already hermetic</h3>
+              <p>A utility core, stateful classes and React hooks: what an application-shaped library looks like to the rule.</p>
+              <span class="more">Read the TanStack Query case study →</span>
+            </a>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="wrap split">
+          <div class="prose">
+            <h2>Get started</h2>
+            <p>
+              Install the plugin next to <code>typescript-eslint</code>, add the recommended config, and mark a function with
+              a <code>"use hermetic"</code> directive or an <code>@hermetic</code> JSDoc tag. The rule checks only marked
+              functions, so it is safe to enable everywhere.
+            </p>
+            <p>
+              Read about <a href="https://github.com/bombadil-labs/hermetic/blob/main/docs/rules/sealed.md">hermetic/sealed</a>,
+              <a href="https://github.com/bombadil-labs/hermetic/blob/main/docs/rules/prefer-hermetic.md">hermetic/prefer-hermetic</a>,
+              and <a href="https://github.com/bombadil-labs/hermetic#the-ground">configuring the ground</a>.
+            </p>
+          </div>
+          <div>
+            <pre data-lang="js">// eslint.config.js
+import { defineConfig } from "eslint/config";
+import tseslint from "typescript-eslint";
+import hermetic from "@bombadil/hermetic";
+
+export default defineConfig(
+  ...tseslint.configs.recommended,
+  hermetic.configs.recommended,
+);</pre>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- footer -->
+  </body>
+</html>

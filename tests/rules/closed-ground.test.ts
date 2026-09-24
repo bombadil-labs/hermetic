@@ -34,6 +34,11 @@ ruleTester.run("configured ground", closed, {
       options: [{ ground: clock }],
     },
     {
+      name: "forbid: uses that do not hand the object anywhere",
+      code: `function f(x) { "use isolated"; return [new Date(0), Date(0), Object(x), typeof Date, x instanceof Date, "now" in Date, x === Date]; }`,
+      options: [{ ground: clock, aliasing: "forbid" }],
+    },
+    {
       name: "an ambient declaration describes a ground global",
       code: `declare const __DEV__: boolean; function f() { "use isolated"; return __DEV__ ? JSON.stringify(1) : ""; }`,
       options: [{ ground: app }],
@@ -75,6 +80,15 @@ ruleTester.run("configured ground", closed, {
       code: `function f() { "use isolated"; const { prototype } = Object; return prototype; }`,
       options: [{ ground: clock, aliasing: "forbid" }],
       errors: [{ messageId: "aliasedGround", data: { path: "Object.prototype", fn: "f" } }],
+    },
+    {
+      name: "forbid: aliasing or passing a callable ground object",
+      code: `function f(g) { "use isolated"; const D = Date; return g(D, Date); }`,
+      options: [{ ground: clock, aliasing: "forbid" }],
+      errors: [
+        { messageId: "aliasedGround", data: { path: "Date", fn: "f" } },
+        { messageId: "aliasedGround", data: { path: "Date", fn: "f" } },
+      ],
     },
     {
       name: "a real binding still shadows a ground global",

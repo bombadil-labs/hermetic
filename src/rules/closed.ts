@@ -25,9 +25,9 @@ export interface ClosedOptions {
   ground?: string;
   /**
    * `"best-effort"` (default) reports denied member paths where they are
-   * statically visible. `"forbid"` also reports every use of a ground object
-   * with denied members other than static member access, such as
-   * `const m = Math`, so denied paths cannot be reached through an alias.
+   * statically visible. `"forbid"` also reports any use of a ground object
+   * with denied members that could hand it elsewhere, such as `const m = Math`
+   * or `f(Math)`, so denied paths cannot be reached through an alias.
    */
   aliasing?: "best-effort" | "forbid";
 }
@@ -117,7 +117,7 @@ export const closed: TSESLint.RuleModule<MessageIds, [ClosedOptions]> & { name: 
       deniedPath:
         "'{{path}}' is denied by the ground in isolated function '{{fn}}'. Pass it through 'this' or an argument.",
       aliasedGround:
-        "'{{path}}' has denied members, so isolated function '{{fn}}' may only use it through static member access. Pass what you need through 'this' or an argument.",
+        "'{{path}}' has denied members, and isolated function '{{fn}}' hands it on here, where they could be reached. Pass what you need through 'this' or an argument.",
       typeReference:
         "Type reference '{{name}}' escapes isolated function '{{fn}}'. With types: \"structural-only\", write the type structurally.",
       lexicalThis:
@@ -202,7 +202,7 @@ export const closed: TSESLint.RuleModule<MessageIds, [ClosedOptions]> & { name: 
       const pattern = destructuringPattern(node);
       if (pattern) {
         checkPattern(pattern, segments, fnName);
-      } else if (forbidAliasing && !isTypeofOperand(node)) {
+      } else if (forbidAliasing && !isNonAliasingUse(node)) {
         report(node, "aliasedGround", { path: segments.join("."), fn: fnName });
       }
     }
@@ -410,6 +410,25 @@ function destructuringPattern(node: TSESTree.Node): TSESTree.ObjectPattern | und
   }
 }
 
-function isTypeofOperand(node: TSESTree.Node): boolean {
-  return node.parent?.type === AST_NODE_TYPES.UnaryExpression && node.parent.operator === "typeof";
+/**
+ * Uses that read a ground object without handing it anywhere: `typeof`,
+ * calling or constructing it, comparisons, and `instanceof` or `in` tests.
+ */
+function isNonAliasingUse(node: TSESTree.Node): boolean {
+  const parent = node.parent;
+  switch (parent?.type) {
+    case AST_NODE_TYPES.UnaryExpression:
+      return parent.operator === "typeof";
+    case AST_NODE_TYPES.CallExpression:
+    case AST_NODE_TYPES.NewExpression:
+      return parent.callee === node;
+    case AST_NODE_TYPES.TaggedTemplateExpression:
+      return parent.tag === node;
+    case AST_NODE_TYPES.BinaryExpression:
+      return NON_ALIASING_OPERATORS.has(parent.operator) || (parent.operator === "in" && parent.right === node);
+    default:
+      return false;
+  }
 }
+
+const NON_ALIASING_OPERATORS: ReadonlySet<string> = new Set(["===", "!==", "==", "!=", "instanceof"]);

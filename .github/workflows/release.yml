@@ -1,0 +1,53 @@
+name: Release
+
+# Publishes to npm when a GitHub release is published, through npm trusted
+# publishing: npm accepts this job's OIDC token, so no npm token is stored
+# anywhere, and each version gets a provenance attestation. Run it by hand to
+# rehearse: it checks, builds and packs everything, and publishes nothing.
+# See RELEASING.md.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install --global npm@^11.5.1
+      - run: npm ci
+      - name: Check the tag matches package.json
+        if: github.event_name == 'release'
+        run: |
+          expected="v$(node -p 'require("./package.json").version')"
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "::error::The release tag is $GITHUB_REF_NAME, but package.json says $expected."
+            exit 1
+          fi
+      # prepublishOnly runs the full check and a clean build before either of these.
+      - name: Publish
+        if: github.event_name == 'release'
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          # A pre-release version, such as 0.2.0-beta.1, must not become `latest`.
+          if [[ "$version" == *-* ]]; then tag=next; else tag=latest; fi
+          npm publish --provenance --access public --tag "$tag"
+      - name: Rehearse
+        if: github.event_name != 'release'
+        run: npm publish --dry-run

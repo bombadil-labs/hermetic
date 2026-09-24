@@ -254,6 +254,8 @@ npm run corpus   # census, stress, fix and round trip on pinned open-source pack
 
 `npm run corpus -- effect` also lifts Effect's own source in a checkout of its repository and runs its test suite on the result; add `--unlift` to lift and then unlift it first. `npm run corpus -- bench` times Effect workloads on its original, lifted and unlifted source. Both need git and pnpm.
 
+Releases are published to npm from GitHub releases. [RELEASING.md](RELEASING.md) covers the one-time setup and each release.
+
 Development needs Node 22.18 or later, because `eslint.config.js` loads the plugin's TypeScript source directly. The repository lints itself with the rule. The plugin's own pure helpers, such as the ground functions in [`src/ground/ground.ts`](src/ground/ground.ts), are marked `"use hermetic"`.
 
 ## License

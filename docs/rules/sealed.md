@@ -116,6 +116,8 @@ type Options = {
 };
 ```
 
+Each option can also be set once for both rules, in `settings.hermetic`. Options given to the rule take precedence.
+
 ### `types`
 
 - `"allow"` (default): type-only references may escape. This includes `typeof x` in a type position, which the scope manager records as a value reference even though it never runs.

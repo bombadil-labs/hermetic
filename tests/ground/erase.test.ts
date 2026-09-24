@@ -22,6 +22,10 @@ describe("erasing TypeScript syntax", () => {
     expect(run("const rest = (...xs: number[]): number => xs.length;\nreturn rest(1, 2, 3);")).toBe(3);
   });
 
+  it("erases ambient declarations", () => {
+    expect(run("declare const x: number;\ndeclare function f(): void;\ndeclare class C {}\ndeclare enum E { A }\ndeclare namespace N { const y: number; }\nreturn typeof x;")).toBe("undefined");
+  });
+
   it("keeps every line and column in place", () => {
     const code = "function f<T>(this: void, a?: T): T[] {\n  let b!: number;\n  return [a as T] satisfies T[];\n}\n";
     const erased = erase(code);

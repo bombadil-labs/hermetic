@@ -1,4 +1,5 @@
 import { AST_NODE_TYPES, type TSESTree } from "@typescript-eslint/utils";
+import { childNodes, type VisitorKeys } from "../ast.ts";
 import { isFunctionNode } from "../marking.ts";
 
 /** TypeScript syntax that changes runtime behavior, or cannot be erased without rewriting code. */
@@ -11,8 +12,6 @@ export class NonErasableSyntaxError extends Error {
     this.node = node;
   }
 }
-
-type VisitorKeys = Readonly<Record<string, readonly string[] | undefined>>;
 
 /**
  * Returns the source text of `node` with TypeScript-only syntax replaced by
@@ -68,6 +67,13 @@ export function eraseTypes(text: string, node: TSESTree.Node, visitorKeys: Visit
         erase(current.range[1] - 1, current.range[1]);
         visit(current.expression);
         return;
+      case AST_NODE_TYPES.VariableDeclaration:
+        // `declare const x: T` only describes something that exists elsewhere.
+        if (current.declare) {
+          eraseStatement(current);
+          return;
+        }
+        break;
       case AST_NODE_TYPES.VariableDeclarator:
         if (current.definite && current.id.type === AST_NODE_TYPES.Identifier) {
           eraseMarker("!", current.id.range[0] + current.id.name.length, current.id.range[1]);
@@ -76,8 +82,16 @@ export function eraseTypes(text: string, node: TSESTree.Node, visitorKeys: Visit
       case AST_NODE_TYPES.TSTypeAssertion:
         throw new NonErasableSyntaxError(current, "An angle-bracket type assertion (use `as` instead)");
       case AST_NODE_TYPES.TSEnumDeclaration:
+        if (current.declare) {
+          eraseStatement(current);
+          return;
+        }
         throw new NonErasableSyntaxError(current, "An enum");
       case AST_NODE_TYPES.TSModuleDeclaration:
+        if (current.declare) {
+          eraseStatement(current);
+          return;
+        }
         throw new NonErasableSyntaxError(current, "A namespace");
       case AST_NODE_TYPES.TSParameterProperty:
         throw new NonErasableSyntaxError(current, "A parameter property");
@@ -86,7 +100,11 @@ export function eraseTypes(text: string, node: TSESTree.Node, visitorKeys: Visit
         throw new NonErasableSyntaxError(current, "An import or export assignment");
       case AST_NODE_TYPES.ClassDeclaration:
       case AST_NODE_TYPES.ClassExpression:
-        if (current.abstract || current.declare || current.implements.length > 0) {
+        if (current.declare) {
+          eraseStatement(current);
+          return;
+        }
+        if (current.abstract || current.implements.length > 0) {
           throw new NonErasableSyntaxError(current, "TypeScript class syntax");
         }
         break;
@@ -126,12 +144,7 @@ export function eraseTypes(text: string, node: TSESTree.Node, visitorKeys: Visit
       }
     }
 
-    for (const key of visitorKeys[current.type] ?? []) {
-      const child: unknown = (current as unknown as Record<string, unknown>)[key];
-      for (const item of Array.isArray(child) ? child : [child]) {
-        if (isNode(item)) visit(item);
-      }
-    }
+    for (const child of childNodes(current, visitorKeys)) visit(child);
   };
 
   visit(node);
@@ -175,6 +188,3 @@ function continuesOnNextLine(text: string, from: number): boolean {
   return false;
 }
 
-function isNode(value: unknown): value is TSESTree.Node {
-  return typeof value === "object" && value !== null && typeof (value as { type?: unknown }).type === "string";
-}

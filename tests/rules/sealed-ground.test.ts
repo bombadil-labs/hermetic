@@ -19,6 +19,11 @@ ruleTester.run("configured ground", sealed, {
       options: [{ ground: clock }],
     },
     {
+      name: "a ground set once in settings.hermetic",
+      code: `function f(t) { "use hermetic"; return new Date(t); }`,
+      settings: { hermetic: { ground: clock } },
+    },
+    {
       name: "a path relative to the working directory",
       code: `function f(t) { "use hermetic"; return new Date(t); }`,
       options: [{ ground: "tests/fixtures/grounds/clock.ground.ts" }],
@@ -91,12 +96,35 @@ ruleTester.run("configured ground", sealed, {
       ],
     },
     {
+      name: "rule options win over settings.hermetic",
+      code: `function f(t) { "use hermetic"; return new Date(t); }`,
+      settings: { hermetic: { ground: clock } },
+      options: [{ ground: app }],
+      errors: [{ messageId: "freeVariable", data: { name: "Date", fn: "f" } }],
+    },
+    {
       name: "a real binding still shadows a ground global",
       code: `const __DEV__ = true; function f() { "use hermetic"; return __DEV__; }`,
       options: [{ ground: app }],
       errors: [{ messageId: "shadowedGround", data: { name: "__DEV__", fn: "f" } }],
     },
   ],
+});
+
+describe("settings.hermetic", () => {
+  it("rejects an unknown value", () => {
+    const lint = () =>
+      new Linter().verify(`function f() { "use hermetic"; }`, [
+        {
+          files: ["**/*.ts"],
+          languageOptions: { parser: tsParser as Linter.Parser },
+          plugins: { hermetic: plugin as never },
+          settings: { hermetic: { types: "strict" } },
+          rules: { "hermetic/sealed": "error" },
+        },
+      ], { filename: "file.ts" });
+    expect(lint).toThrow(/settings\.hermetic\.types must be "allow" or "structural-only"/);
+  });
 });
 
 describe("a ground bootstrap that fails to load", () => {

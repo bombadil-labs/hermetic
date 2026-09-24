@@ -2,14 +2,18 @@
 // Measures the rules against real code: TypeScript sources shipped by large
 // open-source packages, pinned below and downloaded into .corpus/.
 //
-//   npm run corpus            census, stress and fix
-//   npm run corpus -- census  which functions are hermetic, liftable, or need a person
-//   npm run corpus -- stress  every function analyzed as if marked; nothing may throw
+//   npm run corpus               census, stress, fix and roundtrip
+//   npm run corpus -- census     which functions are hermetic, liftable, or need a person
+//   npm run corpus -- stress     every function analyzed as if marked; nothing may throw
 //   npm run corpus -- fix        `prefer-hermetic --fix` with lift: parses, sealed, settled, no new type errors
 //   npm run corpus -- roundtrip  unlifting the lifted corpus gives back the marked corpus
 //   npm run corpus -- effect     lifts Effect's own source and runs its test suite (needs git and pnpm);
 //                                with --unlift, lifts and then unlifts it first
-//   npm run corpus -- bench      times Effect workloads on its original, lifted and unlifted source
+//   npm run corpus -- bench      times Effect workloads on its original, lifted and unlifted source,
+//                                and on a second copy of the original that shows the noise
+//   npm run corpus -- records    writes what happened to every candidate function to .corpus/results/records.json
+//   npm run corpus -- report     writes site/data/corpus.json for the case studies, from all of the above;
+//                                commit first: every result records the commit it came from
 //
 // Library code is one particular shape: few globals, many small helpers, heavy
 // use of namespace imports. Application code reaches for more ambient
@@ -23,11 +27,11 @@ import { fileURLToPath } from "node:url";
 import * as tsParser from "@typescript-eslint/parser";
 import { Linter } from "eslint";
 import ts from "typescript";
-import { analyze, createEnvironment } from "../src/analysis.ts";
+import { analyze, createEnvironment, isAmbient } from "../src/analysis.ts";
 import plugin from "../src/index.ts";
-import { planLift } from "../src/lift.ts";
+import { planLift, tryLift } from "../src/lift.ts";
 import { unlift } from "../src/unlift.ts";
-import { functionName, isMarkedHermetic } from "../src/marking.ts";
+import { functionName, isFunctionNode, isMarkedHermetic } from "../src/marking.ts";
 import { isCandidate } from "../src/rules/prefer-hermetic.ts";
 import { sealed } from "../src/rules/sealed.ts";
 
@@ -45,6 +49,18 @@ const root = fileURLToPath(new URL("../.corpus/", import.meta.url));
 const original = path.join(root, "original");
 const fixedDir = path.join(root, "fixed");
 const roundtripDir = path.join(root, "roundtrip");
+const resultsDir = path.join(root, "results");
+const siteData = fileURLToPath(new URL("../site/data/corpus.json", import.meta.url));
+
+/**
+ * The commit a result comes from, and whether the code that decides the
+ * numbers had uncommitted changes when it ran.
+ */
+function provenance() {
+  const git = (...args) => execFileSync("git", args, { cwd: fileURLToPath(new URL("../", import.meta.url)), encoding: "utf8" }).trim();
+  const dirty = git("status", "--porcelain", "--", "src", "scripts/corpus.mjs", "package.json", "package-lock.json") !== "";
+  return { commit: git("rev-parse", "--short", "HEAD"), dirty };
+}
 
 function prepare() {
   const installed = Object.entries(PACKAGES).every(([name, version]) => {
@@ -206,16 +222,24 @@ function introducedTypeErrors(dir) {
 function fixInPlace(dir) {
   const rules = { "hermetic/prefer-hermetic": ["error", { lift: true }], "hermetic/sealed": "error" };
   const linter = new Linter({ cwd: dir });
-  const counts = { changed: 0, unparsable: 0, unsealed: 0, unsettled: 0 };
+  const counts = { changed: 0, unparsable: 0, unsealed: 0, unsettled: 0, files: [] };
   for (const file of sourceFiles(dir)) {
     const code = fs.readFileSync(file, "utf8");
     const first = linter.verifyAndFix(code, config(rules), { filename: file });
-    if (first.output !== code) counts.changed++;
     fs.writeFileSync(file, first.output);
-    counts.unparsable += first.messages.filter((m) => m.fatal).length;
-    counts.unsealed += first.messages.filter((m) => m.ruleId === "hermetic/sealed").length;
     const second = linter.verifyAndFix(first.output, config(rules), { filename: file });
-    if (second.output !== first.output) counts.unsettled++;
+    const result = {
+      file: path.relative(dir, file),
+      changed: first.output !== code,
+      unparsable: first.messages.filter((m) => m.fatal).length,
+      unsealed: first.messages.filter((m) => m.ruleId === "hermetic/sealed").length,
+      unsettled: second.output !== first.output,
+    };
+    counts.files.push(result);
+    if (result.changed) counts.changed++;
+    counts.unparsable += result.unparsable;
+    counts.unsealed += result.unsealed;
+    if (result.unsettled) counts.unsettled++;
   }
   return counts;
 }
@@ -224,7 +248,8 @@ function runFix() {
   fs.rmSync(fixedDir, { recursive: true, force: true });
   fs.cpSync(original, fixedDir, { recursive: true });
   const started = performance.now();
-  const { changed, unparsable, unsealed, unsettled } = fixInPlace(fixedDir);
+  const fixed = fixInPlace(fixedDir);
+  const { changed, unparsable, unsealed, unsettled } = fixed;
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
   console.log(`\nFix: ${changed} files changed in ${seconds}s`);
   console.log(`  ${unparsable} parse errors, ${unsealed} sealed errors, ${unsettled} files a second pass would change`);
@@ -233,6 +258,7 @@ function runFix() {
   const { before, after, introduced } = introducedTypeErrors(fixedDir);
   console.log(`  ${[...before.values()].reduce((a, b) => a + b, 0)} type errors before, ${[...after.values()].reduce((a, b) => a + b, 0)} after, ${introduced.length} kinds introduced`);
   for (const line of introduced.slice(0, 20)) console.log(`  ${line.slice(0, 220)}`);
+  return { files: fixed.files, introduced };
 }
 
 /**
@@ -255,6 +281,7 @@ function runRoundtrip() {
   let folded = 0;
   const skipped = [];
   const mismatches = [];
+  const perFile = [];
   const started = performance.now();
   for (const file of sourceFiles(roundtripDir)) {
     const code = fs.readFileSync(file, "utf8");
@@ -263,13 +290,15 @@ function runRoundtrip() {
     if (lifted === marked) continue;
     files++;
     // Each core carries one directive; marking alone adds the rest.
-    cores += directives(lifted) - directives(marked);
+    const fileCores = directives(lifted) - directives(marked);
+    cores += fileCores;
     const result = unlift(lifted, file);
     folded += result.unlifted.length;
     for (const skip of result.skipped) skipped.push(`${path.relative(roundtripDir, file)}:${skip.line} ${skip.name}: ${skip.reason}`);
     fs.writeFileSync(file, result.code);
     const difference = compareModules(result.code, marked, file);
     if (difference) mismatches.push(`${path.relative(roundtripDir, file)}: ${difference}`);
+    perFile.push({ file: path.relative(roundtripDir, file), cores: fileCores, folded: result.unlifted.length, skipped: result.skipped.length, differs: Boolean(difference) });
   }
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
   console.log(`\nRound trip: ${files} files with lifts, ${cores} cores, ${folded} folded back in ${seconds}s`);
@@ -279,6 +308,7 @@ function runRoundtrip() {
   const { introduced } = introducedTypeErrors(roundtripDir);
   console.log(`  ${introduced.length} kinds of type errors introduced`);
   for (const line of introduced.slice(0, 10)) console.log(`  ${line.slice(0, 220)}`);
+  return { files: perFile, introduced };
 }
 
 function directives(code) {
@@ -379,12 +409,30 @@ function runEffect(options) {
     for (const line of skipped.slice(0, 10)) console.log(`  ${line}`);
   }
   console.log(`Running Effect's test suite on the ${options.unlift ? "unlifted" : "lifted"} source...`);
-  execFileSync(path.join(checkout, "node_modules", ".bin", shell ? "vitest.cmd" : "vitest"), ["run", "--reporter=dot"], {
-    cwd: path.join(checkout, "packages/effect"),
-    stdio: "inherit",
-    shell,
-  });
+  fs.mkdirSync(resultsDir, { recursive: true });
+  const output = path.join(resultsDir, `effect-${options.unlift ? "unlifted" : "lifted"}.vitest.json`);
+  execFileSync(
+    path.join(checkout, "node_modules", ".bin", shell ? "vitest.cmd" : "vitest"),
+    ["run", "--reporter=dot", "--reporter=json", `--outputFile.json=${output}`],
+    { cwd: path.join(checkout, "packages/effect"), stdio: "inherit", shell },
+  );
+  const suite = JSON.parse(fs.readFileSync(output, "utf8"));
+  const summary = {
+    source: options.unlift ? "unlifted" : "lifted",
+    lifted,
+    date: new Date().toISOString(),
+    ...provenance(),
+    files: suite.testResults.length,
+    tests: suite.numTotalTests,
+    passed: suite.numPassedTests,
+    failed: suite.numFailedTests,
+    skipped: suite.numPendingTests + suite.numTodoTests,
+  };
+  fs.writeFileSync(path.join(resultsDir, `effect-${summary.source}.json`), `${JSON.stringify(summary, null, 2)}\n`);
 }
+
+/** Timings per workload in each benchmark process; the process keeps the median. */
+const BENCH_SAMPLES = 7;
 
 const BENCHMARK = `// Written by scripts/corpus.mjs. Times hot Effect workloads on one copy of the source.
 const tree = process.argv[2]
@@ -416,28 +464,30 @@ const medians: Record<string, number> = {}
 for (const [name, run] of Object.entries(workloads)) {
   for (let i = 0; i < 300; i++) run()
   const samples: number[] = []
-  for (let round = 0; round < 7; round++) {
+  for (let round = 0; round < ${BENCH_SAMPLES}; round++) {
     const start = performance.now()
     for (let i = 0; i < 500; i++) run()
     samples.push(performance.now() - start)
   }
   samples.sort((a, b) => a - b)
-  medians[name] = samples[3]
+  medians[name] = samples[${BENCH_SAMPLES >> 1}]
 }
 console.log(JSON.stringify(medians))
 `;
 
 /**
  * What the lift costs, and what unlifting gives back: hot Effect workloads
- * timed on three copies of Effect's source, each in fresh processes. Each
- * figure is the best median across the processes.
+ * timed on copies of Effect's source, each in fresh processes. The control is
+ * a second, untouched copy of the original, so how far it lands from the
+ * original is the noise. Every copy runs once in each position of the order,
+ * and each figure is the best median across its processes.
  */
 function runBench() {
   const checkout = effectCheckout();
   const packageDir = path.join(checkout, "packages/effect");
   const benchDir = path.join(packageDir, ".hermetic-bench");
   fs.rmSync(benchDir, { recursive: true, force: true });
-  const trees = ["original", "lifted", "unlifted"];
+  const trees = ["original", "lifted", "unlifted", "control"];
   for (const tree of trees) fs.cpSync(path.join(packageDir, "src"), path.join(benchDir, tree), { recursive: true });
   fixInPlace(path.join(benchDir, "lifted"));
   fixInPlace(path.join(benchDir, "unlifted"));
@@ -445,8 +495,8 @@ function runBench() {
   console.log(`\nBenchmark: ${folded} bindings folded back in the unlifted copy, ${skipped.length} skipped`);
   fs.writeFileSync(path.join(benchDir, "run.ts"), BENCHMARK);
   const best = {};
-  for (let round = 0; round < 2; round++) {
-    for (const tree of trees) {
+  for (let round = 0; round < trees.length; round++) {
+    for (const tree of [...trees.slice(round), ...trees.slice(0, round)]) {
       const output = execFileSync(process.execPath, ["--import", "tsx", path.join(benchDir, "run.ts"), tree], { cwd: packageDir, encoding: "utf8" });
       for (const [workload, ms] of Object.entries(JSON.parse(output.trim().split("\n").at(-1)))) {
         best[workload] ??= {};
@@ -454,6 +504,9 @@ function runBench() {
       }
     }
   }
+  const result = { date: new Date().toISOString(), ...provenance(), node: process.version, processes: trees.length, samples: BENCH_SAMPLES, workloads: best };
+  fs.mkdirSync(resultsDir, { recursive: true });
+  fs.writeFileSync(path.join(resultsDir, "bench.json"), `${JSON.stringify(result, null, 2)}\n`);
   console.log(`  ${"workload".padEnd(26)}${trees.map((tree) => tree.padStart(18)).join("")}`);
   for (const [workload, times] of Object.entries(best)) {
     const cells = trees.map((tree) => {
@@ -461,6 +514,236 @@ function runBench() {
       return `${times[tree].toFixed(1)}ms${change}`.padStart(18);
     });
     console.log(`  ${workload.padEnd(26)}${cells.join("")}`);
+  }
+}
+
+/** The libraries the case studies cover, and where their source sits in the corpus. */
+const LIBRARIES = [
+  { id: "effect", name: "Effect", packages: ["effect"], sources: ["effect/src"] },
+  { id: "rxjs", name: "RxJS", packages: ["rxjs"], sources: ["rxjs/src"] },
+  {
+    id: "tanstack-query",
+    name: "TanStack Query",
+    packages: ["@tanstack/query-core", "@tanstack/react-query"],
+    sources: ["@tanstack/query-core/src", "@tanstack/react-query/src"],
+  },
+];
+
+/** The functions the case studies show, as they were and as the fix leaves them. */
+const EXAMPLES = {
+  effect: [
+    ["effect/src/Arbitrary.ts", "absurd"],
+    ["effect/src/internal/schedule/interval.ts", "after"],
+    ["effect/src/Array.ts", "tail"],
+    ["effect/src/internal/context.ts", "makeGenericTag"],
+  ],
+  rxjs: [
+    ["rxjs/src/internal/util/isFunction.ts", "isFunction"],
+    ["rxjs/src/internal/util/pipe.ts", "pipe"],
+    ["rxjs/src/internal/operators/map.ts", "map"],
+  ],
+  "tanstack-query": [
+    ["@tanstack/query-core/src/utils.ts", "addToEnd"],
+    ["@tanstack/query-core/src/utils.ts", "hashQueryKeyByOptions"],
+    ["@tanstack/react-query/src/errorBoundaryUtils.ts", "useClearResetErrorBoundary"],
+    ["@tanstack/react-query/src/useQuery.ts", "useQuery"],
+  ],
+};
+
+const libraryOf = (file) => LIBRARIES.find((library) => library.sources.some((source) => file.startsWith(source + "/") || file.startsWith(source + path.sep)));
+
+/**
+ * What happens to every candidate function: marked, lifted directly or
+ * through a shared context, or skipped and why. A skipped declaration also
+ * records the kinds of names it reads, and whether it would lift if imports
+ * counted as settled. An outermost function bound to no name, such as a
+ * callback passed to another function, is not a candidate; it is recorded as
+ * unnamed, with the function it is passed to.
+ */
+function censusRecords() {
+  const records = [];
+  const kindOf = (reference) => {
+    const variable = reference.resolved;
+    if (!variable || variable.defs.every(isAmbient)) return "global";
+    const values = variable.defs.filter((def) => def.type !== "Type");
+    if (values.length > 0 && values.every((def) => def.type === "FunctionName")) return "function declaration";
+    const def = values[0];
+    switch (def?.type) {
+      case "ImportBinding":
+        return def.node.type === "ImportNamespaceSpecifier" ? "namespace import" : "import";
+      case "Variable":
+        return def.parent.kind;
+      case "ClassName":
+        return "class";
+      case "TSEnumName":
+        return "enum";
+      default:
+        return "other";
+    }
+  };
+  const plugin = {
+    rules: {
+      records: {
+        meta: { schema: [], messages: { x: "x" } },
+        create(context) {
+          const env = createEnvironment(context, {}, sealed);
+          const file = path.relative(original, context.filename).split(path.sep).join("/");
+          return {
+            ":function"(node) {
+              if (!isCandidate(node)) {
+                for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) if (isFunctionNode(ancestor)) return;
+                const callee = node.parent.type === "CallExpression" ? node.parent.callee : undefined;
+                const passedTo = callee?.type === "Identifier" ? callee.name : callee?.type === "MemberExpression" && !callee.computed ? callee.property.name : undefined;
+                return void records.push({ file, line: node.loc.start.line, outcome: "unnamed", passedTo });
+              }
+              if (isMarkedHermetic(node, context.sourceCode)) return;
+              const problems = analyze(node, functionName(node), env);
+              const member = ["Property", "MethodDefinition", "PropertyDefinition"].includes(node.parent.type);
+              const record = { file, name: functionName(node), line: node.loc.start.line, member };
+              if (problems.length === 0) return void records.push({ ...record, outcome: "hermetic" });
+              const result = tryLift(node, problems, env);
+              if (typeof result !== "string") {
+                return void records.push({ ...record, outcome: result.contextName ? "shared" : "direct" });
+              }
+              if (result !== "a declaration that reads unsettled names") return void records.push({ ...record, outcome: "skipped", reason: result });
+              const kinds = new Map(problems.map((problem) => [problem.reference.identifier.name, kindOf(problem.reference)]));
+              const reads = {};
+              for (const kind of kinds.values()) reads[kind] = (reads[kind] ?? 0) + 1;
+              const onlyImports = typeof tryLift(node, problems, env, { importsSettled: true }) !== "string";
+              records.push({ ...record, outcome: "skipped", reason: result, reads, onlyImports });
+            },
+          };
+        },
+      },
+    },
+  };
+  lint(original, { "census/records": "error" }, { census: plugin });
+  return records;
+}
+
+/** The text of a top-level function, and of the context and core the lift declared for it. */
+function statementsFor(code, file, name) {
+  const { ast } = tsParser.parseForESLint(code, { range: true, loc: true, filePath: file, ecmaFeatures: { jsx: file.endsWith("x") } });
+  const names = new Set([name, `${name}Hermetic`, `${name}Context`]);
+  const found = [];
+  for (const statement of ast.body) {
+    const node = statement.type === "ExportNamedDeclaration" || statement.type === "ExportDefaultDeclaration" ? (statement.declaration ?? statement) : statement;
+    const declared =
+      node.type === "FunctionDeclaration"
+        ? node.id?.name
+        : node.type === "VariableDeclaration" && node.declarations.length === 1 && node.declarations[0].id.type === "Identifier"
+          ? node.declarations[0].id.name
+          : undefined;
+    if (declared && names.has(declared)) found.push(code.slice(statement.range[0], statement.range[1]));
+  }
+  return found.join("\n\n");
+}
+
+function readResult(name) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(resultsDir, `${name}.json`), "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The case studies' data: for each library, what the census, the fix and the
+ * round trip found, and the examples as they were and as the fix leaves them.
+ * Adds Effect's test-suite and benchmark results from their last runs.
+ */
+/** Writes what happened to every candidate function to .corpus/results/records.json, for looking one up. */
+function runRecords() {
+  return writeRecords(censusRecords());
+}
+
+function writeRecords(records) {
+  fs.mkdirSync(resultsDir, { recursive: true });
+  const file = path.join(resultsDir, "records.json");
+  fs.writeFileSync(file, `${JSON.stringify(records, null, 1)}\n`);
+  console.log(`\nRecords: ${records.length} functions in ${path.relative(process.cwd(), file)}`);
+  return records;
+}
+
+function runReport() {
+  const records = writeRecords(censusRecords());
+  const fixed = runFix();
+  const roundtrip = runRoundtrip();
+  const libraries = LIBRARIES.map((library) => {
+    const mine = records.filter((record) => libraryOf(record.file) === library);
+    const count = (test) => mine.filter(test).length;
+    const reasons = new Map();
+    for (const record of mine.filter((r) => r.outcome === "skipped")) reasons.set(record.reason, (reasons.get(record.reason) ?? 0) + 1);
+    const inLibrary = (entry) => libraryOf(entry.file) === library;
+    const fixedFiles = fixed.files.filter(inLibrary);
+    const roundFiles = roundtrip.files.filter(inLibrary);
+    const typeErrors = (lines) => lines.filter((line) => libraryOf(line.replace(/^\d+ x /, "")) === library).length;
+    const examples = (EXAMPLES[library.id] ?? []).map(([file, name]) => {
+      const record = mine.find((r) => r.file === file && r.name === name);
+      if (!record) throw new Error(`The example ${file}#${name} is not a candidate function`);
+      return {
+        file,
+        name,
+        line: record.line,
+        outcome: record.outcome,
+        reason: record.reason,
+        before: statementsFor(fs.readFileSync(path.join(original, file), "utf8"), file, name),
+        after: record.outcome === "skipped" ? undefined : statementsFor(fs.readFileSync(path.join(fixedDir, file), "utf8"), file, name),
+      };
+    });
+    return {
+      id: library.id,
+      name: library.name,
+      packages: library.packages.map((name) => ({ name, version: PACKAGES[name] })),
+      files: fixedFiles.length,
+      candidates: count((r) => r.outcome !== "unnamed"),
+      hermetic: count((r) => r.outcome === "hermetic"),
+      hermeticMembers: count((r) => r.outcome === "hermetic" && r.member),
+      direct: count((r) => r.outcome === "direct"),
+      shared: count((r) => r.outcome === "shared"),
+      skipped: count((r) => r.outcome === "skipped"),
+      reasons: [...reasons].sort((a, b) => b[1] - a[1]).map(([reason, n]) => ({ reason, count: n })),
+      hoistedOnlyImports: count((r) => r.onlyImports),
+      unnamed: count((r) => r.outcome === "unnamed"),
+      unnamedPassedTo: Object.fromEntries(
+        [...Map.groupBy(mine.filter((r) => r.outcome === "unnamed" && r.passedTo), (r) => r.passedTo)]
+          .map(([callee, entries]) => [callee, entries.length])
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 5),
+      ),
+      validation: {
+        filesChanged: fixedFiles.filter((f) => f.changed).length,
+        parseErrors: fixedFiles.reduce((sum, f) => sum + f.unparsable, 0),
+        sealedErrors: fixedFiles.reduce((sum, f) => sum + f.unsealed, 0),
+        unsettledFiles: fixedFiles.filter((f) => f.unsettled).length,
+        typeErrorsIntroduced: typeErrors(fixed.introduced),
+        folded: roundFiles.reduce((sum, f) => sum + f.folded, 0),
+        roundTripSkipped: roundFiles.reduce((sum, f) => sum + f.skipped, 0),
+        roundTripDiffering: roundFiles.filter((f) => f.differs).length,
+        roundTripTypeErrorsIntroduced: typeErrors(roundtrip.introduced),
+      },
+      examples,
+    };
+  });
+  const generated = { date: new Date().toISOString(), ...provenance(), node: process.version };
+  const data = {
+    generated,
+    libraries,
+    effect: { tag: EFFECT.tag, lifted: readResult("effect-lifted"), unlifted: readResult("effect-unlifted"), bench: readResult("bench") },
+  };
+  fs.mkdirSync(path.dirname(siteData), { recursive: true });
+  fs.writeFileSync(siteData, `${JSON.stringify(data, null, 2)}\n`);
+  console.log(`\nReport: ${path.relative(process.cwd(), siteData)}, at ${generated.commit}${generated.dirty ? " with uncommitted changes" : ""}`);
+  for (const library of libraries) {
+    console.log(`  ${library.name}: ${library.candidates} candidates, ${library.hermetic} hermetic, ${library.direct + library.shared} lifted, ${library.skipped} skipped`);
+  }
+  const runs = { lifted: "effect", unlifted: "effect --unlift", bench: "bench" };
+  for (const [key, command] of Object.entries(runs)) {
+    const result = data.effect[key];
+    if (!result) console.log(`  No ${key} results yet: run npm run corpus -- ${command}`);
+    else if (result.commit !== generated.commit || result.dirty !== generated.dirty) {
+      console.log(`  The ${key} results come from ${result.commit ?? "an unknown commit"}${result.dirty ? " with uncommitted changes" : ""}: run npm run corpus -- ${command}`);
+    }
   }
 }
 
@@ -472,3 +755,5 @@ if (command === "fix" || command === "all") runFix();
 if (command === "roundtrip" || command === "all") runRoundtrip();
 if (command === "effect") runEffect({ unlift: process.argv.includes("--unlift") });
 if (command === "bench") runBench();
+if (command === "records") runRecords();
+if (command === "report") runReport();

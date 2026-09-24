@@ -145,7 +145,7 @@ function examplePanel(spec, file) {
   const pane = (label, code) => `<div class="pane"><p class="pane-label">${label}</p>${highlight(code, lang)}</div>`;
   const panes = example.after
     ? `<div class="panes">${pane("Before", example.before)}${pane("After --fix", example.after)}</div>`
-    : `<div class="panes single">${pane("Unchanged", example.before)}</div>`;
+    : `<div class="panes">${pane("Unchanged", example.before)}</div>`;
   return `<figure class="example"><figcaption>${caption}</figcaption>${panes}</figure>`;
 }
 

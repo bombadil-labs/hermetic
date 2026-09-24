@@ -125,15 +125,15 @@ The lift has an exact inverse. `unlift` turns each binding back into the functio
 
 It folds a binding back only where that is exact: the core is used by its binding alone, reads `this` only through the names its context provides, and none of those names is shadowed where the core reads it. A core that tests import, or that someone has edited out of the lift's shape, stays as it is and is reported.
 
-On the corpus, unlifting the lifted code gives back the marked original in every file: the same syntax tree once types are erased, with every comment in place, apart from the equivalences the lift cannot record (`=> { return x; }` and `=> x`, `{ x: x }` and `{ x }`, and parenthesization). The round trip adds no type errors. Effect's 6,233 tests pass on its unlifted source, and its benchmarks run within noise of the original:
+On the corpus, unlifting the lifted code gives back the marked original in every file: the same syntax tree once types are erased, with every comment in place, apart from the equivalences the lift cannot record (`=> { return x; }` and `=> x`, `{ x: x }` and `{ x }`, and parenthesization). The round trip adds no type errors. Effect's 6,233 tests pass on its unlifted source, and its benchmarks run within noise of the original. Times are relative to Effect's own source; the last column is a second, untouched copy of it, timed the same way, so it shows the noise:
 
-| Workload | Lifted | Unlifted |
-| --- | --- | --- |
-| `Effect.gen` with `map` and `flatMap` | +24% | −1% |
-| `Chunk`, `HashMap`, `Option` | +68% | +1% |
-| `Schema` decoding | +51% | +3% |
+| Workload | Lifted | Unlifted | Original again |
+| --- | --- | --- | --- |
+| `Effect.gen` with `map` and `flatMap` | +25% | +2% | +3% |
+| `Chunk`, `HashMap`, `Option` | +73% | +7% | +8% |
+| `Schema` decoding | +49% | +2% | +2% |
 
-`npm run corpus -- roundtrip`, `npm run corpus -- effect --unlift` and `npm run corpus -- bench` reproduce these. `unlift` lives in [`src/unlift.ts`](../../src/unlift.ts) and is not exported yet: a bundler plugin that applies it to production builds comes next.
+`npm run corpus -- roundtrip`, `npm run corpus -- effect --unlift` and `npm run corpus -- bench` reproduce these, and the [Effect case study](https://bombadil-labs.github.io/hermetic/case-studies/effect.html) has the full story. `unlift` lives in [`src/unlift.ts`](../../src/unlift.ts) and is not exported yet: a bundler plugin that applies it to production builds comes next.
 
 ## Options
 

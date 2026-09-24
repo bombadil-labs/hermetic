@@ -70,7 +70,9 @@ pre {
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 0.08em 0.35em;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 pre {
@@ -223,8 +225,6 @@ h3 {
   background: none;
   border: 0;
   padding: 0;
-  white-space: nowrap;
-  overflow-x: auto;
 }
 
 .install button {
@@ -273,7 +273,7 @@ section > .wrap > h2,
 
 .split {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
   gap: 2.5rem;
   align-items: start;
 }
@@ -440,7 +440,9 @@ th {
 }
 
 td.num,
-th.num {
+th.num,
+td[align="right"],
+th[align="right"] {
   text-align: right;
 }
 
@@ -456,14 +458,11 @@ th.num {
   margin-bottom: 0.6rem;
 }
 
+/* Stacked, so long TypeScript signatures get the full width. */
 .panes {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 0.8rem;
-}
-
-.panes.single {
   grid-template-columns: minmax(0, 1fr);
+  gap: 0.8rem;
 }
 
 .pane-label {
@@ -476,7 +475,6 @@ th.num {
 
 .pane pre {
   font-size: 0.8rem;
-  height: calc(100% - 1.5rem);
 }
 
 .tag {
@@ -545,8 +543,7 @@ th.num {
 }
 
 @media (max-width: 860px) {
-  .split,
-  .panes {
+  .split {
     grid-template-columns: minmax(0, 1fr);
   }
   .hero {

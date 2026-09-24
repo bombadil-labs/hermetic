@@ -1,9 +1,9 @@
 ---
-title: RxJS: why {{rxjs.hoistedSkipped}} operators were left alone
+title: RxJS: why the lift leaves the operators alone
 description: What prefer-hermetic did to RxJS {{rxjs.version}}, and what it refused to do: hoisted operators, import cycles, and the cost of being exact.
 ---
 
-# RxJS: why {{rxjs.hoistedSkipped}} operators were left alone
+# RxJS: why the lift leaves the operators alone
 
 <p class="lede">RxJS is the reference implementation of observables for JavaScript. The lift split {{rxjs.lifted}} of its {{rxjs.candidates}} functions and left {{rxjs.skipped}} alone. This case study is about those refusals: what the lift will not do to a function it cannot prove safe to split, and what that costs.</p>
 

@@ -14,7 +14,7 @@ Purity is unenforceable in JavaScript: any argument can be a Proxy, or carry a g
 A hermetic function's whole world arrives through two doors, so anything standing at those doors sees everything:
 
 - **Relocation.** A hermetic function can move to another file, worker or realm unchanged. The acid test: `new Function("return " + fn.toString())()` behaves identically to `fn`. This repository's tests run that test on the examples.
-- **Mocking, tracing, record/replay.** Wrap `this` in a Proxy and you have a complete log of every effect the function can have, with no instrumentation inside it.
+- **Mocking, tracing, record/replay.** Wrap `this` in a Proxy and you log every use of the authority the function was granted, with no instrumentation inside it.
 - **Authority audits.** Every grant lives in the binding layer, so "what can touch Stripe?" is answered by reading the wiring.
 - **Context-complete units.** Arguments, `this` type and body are everything an agent or reviewer needs to edit the function. The rule guards generated code as well as handwritten code.
 
@@ -219,9 +219,9 @@ The generated binding is the degenerate binding layer: it grants exactly what th
 npx eslint --fix --rule '{"hermetic/prefer-hermetic": ["warn", {"lift": true}]}' src/
 ```
 
-The fix applies only where the split preserves behavior and types, and leaves the rest for a person. On Effect, RxJS and TanStack Query, it marked 22.8% of 5,315 candidate functions and lifted 46.1%, the fixed code type-checks with no new errors, and Effect's own 6,233 tests pass on its lifted source. The [rule's documentation](docs/rules/prefer-hermetic.md) lists what it skips, what changes (a stack frame, `toString`, a per-call cost), and how it decides.
+The fix applies only where the split preserves behavior and types, and leaves the rest for a person. On Effect, RxJS and TanStack Query, it marked 22.8% of 5,315 candidate functions and lifted 46.1%, the fixed code type-checks with no new errors, and Effect's own 6,233 tests pass on its lifted source. The [case studies](https://bombadil-labs.github.io/hermetic/) go through each library: what was marked, lifted and left alone, and why. The [rule's documentation](docs/rules/prefer-hermetic.md) lists what it skips, what changes (a stack frame, `toString`, a per-call cost), and how it decides.
 
-The lift also has an exact inverse, `unlift`, which folds each binding back into the function it came from. Hermeticity can then work like types: checked in the source, erased in the build. On the corpus, unlifting the lifted code gives back the original program in every file, and Effect's benchmarks return from 24–68% slower to within noise of the original. A bundler plugin that applies it to production builds is next; see [unlifting at build time](docs/rules/prefer-hermetic.md#unlifting-at-build-time).
+The lift also has an exact inverse, `unlift`, which folds each binding back into the function it came from. Hermeticity can then work like types: checked in the source, erased in the build. On the corpus, unlifting the lifted code gives back the original program in every file, and Effect's benchmarks go from 25–73% slower when lifted to within noise of the original when unlifted. A bundler plugin that applies it to production builds is next; see [unlifting at build time](docs/rules/prefer-hermetic.md#unlifting-at-build-time).
 
 ## What hermeticity does not give you
 
@@ -252,7 +252,9 @@ npm run build    # emit dist/
 npm run corpus   # census, stress, fix and round trip on pinned open-source packages
 ```
 
-`npm run corpus -- effect` also lifts Effect's own source in a checkout of its repository and runs its test suite on the result; add `--unlift` to lift and then unlift it first. `npm run corpus -- bench` times Effect workloads on its original, lifted and unlifted source. Both need git and pnpm.
+`npm run corpus -- effect` also lifts Effect's own source in a checkout of its repository and runs its test suite on the result; add `--unlift` to lift and then unlift it first. `npm run corpus -- bench` times Effect workloads on its original, lifted and unlifted source, and on a second copy of the original that shows the noise. Both need git and pnpm.
+
+`npm run corpus -- report` gathers all of it into `site/data/corpus.json`, and `npm run site` builds the [site](https://bombadil-labs.github.io/hermetic/) from that into `_site/`; every number on its pages comes from the report. `npm run corpus -- records` writes what happened to every function in the corpus to `.corpus/results/records.json`, for looking one up.
 
 Releases are published to npm from GitHub releases. [RELEASING.md](RELEASING.md) covers the one-time setup and each release.
 

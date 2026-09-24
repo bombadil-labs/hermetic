@@ -53,13 +53,14 @@
             </p>
           </div>
           <div>
-            <pre data-lang="ts">function applyDiscount(this: PricingCtx, invoice: Invoice): Invoice {
+            <pre data-lang="ts">function applyDiscount(this: Pricing, invoice: Invoice) {
   "use hermetic";
-  return { ...invoice, total: this.clamp(invoice.total * (1 - this.rate)) };
+  const discounted = invoice.total * (1 - this.rate);
+  return { ...invoice, total: this.clamp(discounted) };
 }
 
 // The binding layer: the one place authority is granted.
-const pricing: PricingCtx = { rate: config.discountRate, clamp: clampToCents };
+const pricing = { rate: config.rate, clamp: toCents };
 export const applyPricing = applyDiscount.bind(pricing);</pre>
           </div>
         </div>
@@ -121,22 +122,21 @@ export const applyPricing = applyDiscount.bind(pricing);</pre>
       </section>
 
       <section>
-        <div class="wrap split">
-          <div class="prose">
+        <div class="wrap">
+          <div class="section-head">
             <h2>Checked in the source, erased in the build</h2>
             <p>
               A lifted function costs one more call and a few property reads each time it runs. The lift has an exact
               inverse, <code>unlift</code>, which folds every binding back into the function it came from. The source stays
               hermetic, checked and testable; the build ships the original code.
             </p>
-            <p>
-              Unlifting the lifted corpus gives back the original program in every file, and Effect's
-              {{effect.suite.unlifted.passed}} tests pass on its unlifted source too.
-            </p>
           </div>
-          <div>
-            <!-- bench -->
-          </div>
+          <!-- bench -->
+          <p class="prose">
+            On Effect's hot paths, the unlifted source lands where a second copy of the original does: within noise.
+            Unlifting the lifted corpus gives back the original program in every file, and Effect's
+            {{effect.suite.unlifted.passed}} tests pass on its unlifted source too.
+          </p>
         </div>
       </section>
 
@@ -158,7 +158,7 @@ export const applyPricing = applyDiscount.bind(pricing);</pre>
             </a>
             <a class="card link" href="case-studies/rxjs.html">
               <span class="kicker">RxJS {{rxjs.version}}</span>
-              <h3>Why {{rxjs.hoistedSkipped}} operators were left alone</h3>
+              <h3>Why the lift leaves the operators alone</h3>
               <p>Hoisted declarations, import cycles, and the cost of being exact. What one opt-in would change.</p>
               <span class="more">Read the RxJS case study →</span>
             </a>

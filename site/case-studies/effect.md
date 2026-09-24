@@ -72,7 +72,7 @@ A lifted function costs one more call and a few property reads each time it runs
 
 <!-- bench -->
 
-That cost is why the lift has an exact inverse. `unlift` folds each binding back into the function it came from, so the source stays hermetic and the build ships the original code, which runs within noise of Effect as published.
+That cost is why the lift has an exact inverse. `unlift` folds each binding back into the function it came from, so the source stays hermetic and the build ships the original code. In the table, the unlifted source lands where the second copy of the original does: within noise of Effect as published.
 
 ## Reproduce it
 

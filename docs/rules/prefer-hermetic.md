@@ -106,7 +106,7 @@ The fix only applies when the split cannot change behavior or types. It skips:
 - `this` parameters, `asserts` return types, and `@ts-expect-error`, `@ts-ignore` or `@ts-nocheck` comments, whose target lines would move.
 - Signatures TypeScript cannot repeat faithfully: a rest parameter in a generic function typed as anything but a type parameter, an array or a tuple, and a mapped type with an `as` clause written into the signature.
 - Functions that read the stack, through `.stack`, `Error.captureStackTrace`, `Error.prepareStackTrace` or `Error.stackTraceLimit`. The split adds a frame.
-- Defaults that read a destructured parameter.
+- Defaults that read a destructured parameter, and defaults that call a function. The binding and the core both keep each default, and the core's runs again whenever the binding's produced `undefined`.
 - Everything, under `types: "structural-only"`: the generated `this` type refers to module declarations.
 
 ### What changes
@@ -116,8 +116,24 @@ The fix only applies when the split cannot change behavior or types. It skips:
 - **Lifted functions receive the context as `this`.** The core calls `this.round(...)` where the original called `round(...)`, so `round` runs with the context as `this` instead of `undefined`. Functions that ignore `this`, which is nearly all module functions, are unaffected.
 - **Host functions called bare are bound to `globalThis`**, so that calls such as `this.fetch(url)` keep their receiver. Each read returns a new bound function.
 - **Async functions and generators** become plain functions that return the core's promise or iterator.
-- **Each call costs one more call and some property reads.** In microbenchmarks of Effect's hottest paths (collections, the fiber runtime, Schema decoding), the lifted library ran 15 to 70 percent slower. The cost is per call, so it matters where calls are cheap and frequent. Hot internals are a good place to leave unlifted.
+- **Each call costs one more call and some property reads.** In microbenchmarks of Effect's hottest paths (collections, the fiber runtime, Schema decoding), the lifted library ran 15 to 70 percent slower. The cost is per call, so it matters where calls are cheap and frequent. [Unlifting](#unlifting-at-build-time) removes it from builds.
 - **Formatting and ordering.** The fix emits plain formatting, so run your formatter afterwards. The binding refers to its context and core, which are declared after it, and `no-use-before-define` reports that unless its `functions` and `variables` options are off.
+
+### Unlifting at build time
+
+The lift has an exact inverse. `unlift` turns each binding back into the function it came from: the core's parameters and body return to the binding, each `this.name` reads `name` again, and the core and its context are removed. The result carries no directive, since it is no longer hermetic. Source stays hermetic, checked and testable, while a build ships the original code and none of the costs above.
+
+It folds a binding back only where that is exact: the core is used by its binding alone, reads `this` only through the names its context provides, and none of those names is shadowed where the core reads it. A core that tests import, or that someone has edited out of the lift's shape, stays as it is and is reported.
+
+On the corpus, unlifting the lifted code gives back the marked original in every file: the same syntax tree once types are erased, with every comment in place, apart from the equivalences the lift cannot record (`=> { return x; }` and `=> x`, `{ x: x }` and `{ x }`, and parenthesization). The round trip adds no type errors. Effect's 6,233 tests pass on its unlifted source, and its benchmarks run within noise of the original:
+
+| Workload | Lifted | Unlifted |
+| --- | --- | --- |
+| `Effect.gen` with `map` and `flatMap` | +24% | −1% |
+| `Chunk`, `HashMap`, `Option` | +68% | +1% |
+| `Schema` decoding | +51% | +3% |
+
+`npm run corpus -- roundtrip`, `npm run corpus -- effect --unlift` and `npm run corpus -- bench` reproduce these. `unlift` lives in [`src/unlift.ts`](../../src/unlift.ts) and is not exported yet: a bundler plugin that applies it to production builds comes next.
 
 ## Options
 

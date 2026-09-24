@@ -221,6 +221,8 @@ npx eslint --fix --rule '{"hermetic/prefer-hermetic": ["warn", {"lift": true}]}'
 
 The fix applies only where the split preserves behavior and types, and leaves the rest for a person. On Effect, RxJS and TanStack Query, it marked 22.8% of 5,315 candidate functions and lifted 46.1%, the fixed code type-checks with no new errors, and Effect's own 6,233 tests pass on its lifted source. The [rule's documentation](docs/rules/prefer-hermetic.md) lists what it skips, what changes (a stack frame, `toString`, a per-call cost), and how it decides.
 
+The lift also has an exact inverse, `unlift`, which folds each binding back into the function it came from. Hermeticity can then work like types: checked in the source, erased in the build. On the corpus, unlifting the lifted code gives back the original program in every file, and Effect's benchmarks return from 24–68% slower to within noise of the original. A bundler plugin that applies it to production builds is next; see [unlifting at build time](docs/rules/prefer-hermetic.md#unlifting-at-build-time).
+
 ## What hermeticity does not give you
 
 - **Purity.** A hermetic function can still do anything its arguments and `this` allow, and any of them can be a Proxy.
@@ -238,6 +240,8 @@ The fix applies only where the split preserves behavior and types, and leaves th
 | M4 | Doctest harness with the `toString` round trip | Next |
 | M5 | Recording Proxy for `this`, replaying a captured call as a test | Next |
 | | `hermetic/prefer-hermetic`: marking and lift fixes, validated on a corpus | Done |
+| | `unlift`: the lift's exact inverse, validated by a round trip on the corpus | Done |
+| | Bundler plugin that unlifts production builds | Next |
 
 ## Development
 
@@ -245,10 +249,10 @@ The fix applies only where the split preserves behavior and types, and leaves th
 npm install
 npm run check    # typecheck, lint, test
 npm run build    # emit dist/
-npm run corpus   # census, stress and fix on pinned open-source packages
+npm run corpus   # census, stress, fix and round trip on pinned open-source packages
 ```
 
-`npm run corpus -- effect` also lifts Effect's own source in a checkout of its repository and runs its test suite on the result. It needs git and pnpm.
+`npm run corpus -- effect` also lifts Effect's own source in a checkout of its repository and runs its test suite on the result; add `--unlift` to lift and then unlift it first. `npm run corpus -- bench` times Effect workloads on its original, lifted and unlifted source. Both need git and pnpm.
 
 Development needs Node 22.18 or later, because `eslint.config.js` loads the plugin's TypeScript source directly. The repository lints itself with the rule. The plugin's own pure helpers, such as the ground functions in [`src/ground/ground.ts`](src/ground/ground.ts), are marked `"use hermetic"`.
 

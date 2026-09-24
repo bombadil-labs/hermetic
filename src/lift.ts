@@ -1,5 +1,5 @@
-import { AST_NODE_TYPES, ASTUtils, type TSESLint, type TSESTree } from "@typescript-eslint/utils";
-import { childNodes } from "./ast.ts";
+import { AST_NODE_TYPES, AST_TOKEN_TYPES, ASTUtils, type TSESLint, type TSESTree } from "@typescript-eslint/utils";
+import { applyEdits, arrowToken, childNodes, type Edit, LINE_BREAK, looseComments, parameterSpan, renderComments } from "./ast.ts";
 import { type Environment, isAmbient, isTypeOnly, type MessageIds, type Problem } from "./analysis.ts";
 import { directiveInsertion, type FunctionNode, isFunctionNode, isMarkedHermetic } from "./marking.ts";
 
@@ -62,6 +62,7 @@ export function planLift(fn: FunctionNode, problems: readonly Problem[], env: En
     usesOwnReceiver(fn, env) ||
     suppressesTypeErrors(fn, env) ||
     defaultReadsPattern(fn) ||
+    defaultMayRunTwice(fn, env) ||
     !forwardsRestExactly(fn) ||
     remapsKeysInline(fn, env) ||
     inspectsStack(fn, env)
@@ -170,6 +171,19 @@ function defaultReadsPattern(fn: FunctionNode): boolean {
       (param.type === AST_NODE_TYPES.AssignmentPattern && param.left.type !== AST_NODE_TYPES.Identifier),
   );
   return seenPattern !== -1 && fn.params.slice(seenPattern + 1).some((param) => param.type === AST_NODE_TYPES.AssignmentPattern);
+}
+
+/**
+ * The binding and the core both keep each default. The core's runs again only
+ * when the binding's produced `undefined`, which matters only when running it
+ * has an effect: a call.
+ */
+function defaultMayRunTwice(fn: FunctionNode, env: Environment): boolean {
+  const calls = (node: TSESTree.Node): boolean =>
+    node.type === AST_NODE_TYPES.CallExpression ||
+    node.type === AST_NODE_TYPES.TaggedTemplateExpression ||
+    (!isFunctionNode(node) && [...childNodes(node, env.sourceCode.visitorKeys)].some(calls));
+  return fn.params.some((param) => param.type === AST_NODE_TYPES.AssignmentPattern && calls(param.right));
 }
 
 /**
@@ -459,7 +473,7 @@ export function liftFix(
   const base = indentOf(sourceCode, plan.statement);
   const unit = indentUnit(sourceCode, fn);
 
-  const edits: { range: readonly [number, number]; text: string }[] = plan.identifiers.map((identifier) => ({
+  const edits: Edit[] = plan.identifiers.map((identifier) => ({
     range: identifier.range,
     text: isShorthandValue(identifier) ? `${identifier.name}: this.${identifier.name}` : `this.${identifier.name}`,
   }));
@@ -470,12 +484,12 @@ export function liftFix(
     }
   }
   const raw = (node: TSESTree.Node | undefined | null): string => (node ? text.slice(node.range[0], node.range[1]) : "");
-  const rewritten = (node: TSESTree.Node): string => applyEdits(text, node.range, edits);
 
   // The core: same parameters and body, with lifted references read from `this`.
   const lifted = [...plan.lifted.values()];
   const contextType = `this: { ${lifted.map((entry) => `${entry.name}: ${contextMemberType(entry)}`).join("; ")} }`;
-  const coreParams = [...(typescript ? [contextType] : []), ...fn.params.map(rewritten)].join(", ");
+  const params = applyEdits(text, parameterSpan(fn, sourceCode), edits);
+  const coreParams = typescript ? withThisParameter(params, contextType) : params;
   const head = `${fn.async ? "async " : ""}function${fn.generator ? "*" : ""} ${plan.coreName}`;
   const signature = `${raw(fn.typeParameters)}(${coreParams})${raw(fn.returnType)}`;
   let body: string;
@@ -483,9 +497,16 @@ export function liftFix(
     const { at, text: directive } = directiveInsertion(fn.body, sourceCode);
     body = applyEdits(text, fn.body.range, [...edits, { range: [at, at], text: directive }]);
   } else {
-    body = `{\n${base}${unit}"use hermetic";\n${base}${unit}return ${rewritten(fn.body)};\n${base}}`;
+    // Only arrows have expression bodies.
+    const arrow = fn as TSESTree.ArrowFunctionExpression;
+    body = `{\n${base}${unit}"use hermetic";\n${base}${unit}return ${expressionBody(arrow, fn.body, sourceCode, edits)};\n${base}}`;
   }
-  const core = `${head}${signature} ${body}`;
+  // Comments between the parts copied above, such as one before `=>`, go before the core's body.
+  const copied: (readonly [number, number])[] = [parameterSpan(fn, sourceCode)];
+  for (const part of [fn.typeParameters, fn.returnType]) if (part) copied.push(part.range);
+  copied.push(fn.body.type === AST_NODE_TYPES.BlockStatement ? fn.body.range : [arrowToken(fn as TSESTree.ArrowFunctionExpression, sourceCode).range[1], fn.range[1]]);
+  const notes = renderComments(looseComments(fn, copied, sourceCode), sourceCode, base);
+  const core = `${head}${signature} ${notes}${body}`;
 
   // The binding: same name, parameters and return type; forwards to the core.
   const forwarded: string[] = [];
@@ -535,13 +556,60 @@ export function liftFix(
     const members = lifted.flatMap((entry) => contextMembers(entry, typescript)).map((line) => `${base}${unit}${line}`);
     declarations.unshift([`const ${plan.contextName} = {`, ...members, `${base}};`].join("\n"));
   }
-  // After the statement's line, so a trailing comment stays with the binding.
-  const lineEnd = text.indexOf("\n", plan.statement.range[1]);
-  const at = lineEnd === -1 ? text.length : lineEnd;
+  const at = declarationSite(plan.statement, sourceCode);
   return [
     fixer.replaceText(fn, binding),
     fixer.insertTextAfterRange([at, at], declarations.map((declaration) => `\n\n${base}${declaration}`).join("")),
   ];
+}
+
+/**
+ * Where the context and core go: after the binding's statement and any
+ * comments that close on its last line, so a trailing comment stays with the
+ * binding. When code shares that line, they go right after the statement:
+ * nothing may run between the binding and its context.
+ */
+function declarationSite(statement: TSESTree.Node, sourceCode: SourceCode): number {
+  const line = statement.loc.end.line;
+  let end = statement.range[1];
+  let next = sourceCode.getTokenAfter(statement, { includeComments: true });
+  while (next && isComment(next) && next.loc.start.line === line && next.loc.end.line === line) {
+    end = next.range[1];
+    next = sourceCode.getTokenAfter(next, { includeComments: true });
+  }
+  if (next && next.loc.start.line === line) return statement.range[1];
+  const lineBreak = new RegExp(LINE_BREAK.source, "g");
+  lineBreak.lastIndex = end;
+  return lineBreak.exec(sourceCode.text)?.index ?? sourceCode.text.length;
+}
+
+function isComment(token: TSESTree.Token): token is TSESTree.Comment {
+  return token.type === AST_TOKEN_TYPES.Line || token.type === AST_TOKEN_TYPES.Block;
+}
+
+/** Adds the context parameter in front of the others, following their layout. */
+function withThisParameter(params: string, contextType: string): string {
+  if (params.trim() === "") return contextType;
+  const leading = /^\s*/.exec(params)?.[0] ?? "";
+  return LINE_BREAK.test(leading) ? `${leading}${contextType},${params}` : `${contextType}, ${params.slice(leading.length)}`;
+}
+
+/**
+ * An expression body as the core returns it: everything after `=>`, with its
+ * parentheses and comments. A comment that ends a line would let automatic
+ * semicolon insertion end the return early, so that text is parenthesized.
+ */
+function expressionBody(
+  fn: TSESTree.ArrowFunctionExpression,
+  body: TSESTree.Expression,
+  sourceCode: SourceCode,
+  edits: readonly Edit[],
+): string {
+  const start = arrowToken(fn, sourceCode).range[1];
+  const expression = applyEdits(sourceCode.text, [start, fn.range[1]], edits).trimStart();
+  const first = sourceCode.getFirstToken(body);
+  const lead = sourceCode.text.slice(start, first ? first.range[0] : body.range[0]).trim();
+  return /\/\/|\r|\n|\u2028|\u2029/.test(lead) ? `(${expression}\n)` : expression;
 }
 
 function contextMemberType(entry: Lifted): string {
@@ -565,22 +633,6 @@ function isShorthandValue(identifier: TSESTree.Identifier): boolean {
   if (node.parent?.type === AST_NODE_TYPES.AssignmentPattern && node.parent.left === node) node = node.parent;
   const parent = node.parent;
   return parent?.type === AST_NODE_TYPES.Property && parent.shorthand && parent.value === node;
-}
-
-function applyEdits(
-  text: string,
-  [start, end]: readonly [number, number],
-  edits: readonly { range: readonly [number, number]; text: string }[],
-): string {
-  let result = "";
-  let at = start;
-  const inside = edits.filter((edit) => edit.range[0] >= start && edit.range[1] <= end);
-  // Insertions sort before replacements that start at the same offset.
-  for (const edit of inside.sort((a, b) => a.range[0] - b.range[0] || a.range[1] - b.range[1])) {
-    result += text.slice(at, edit.range[0]) + edit.text;
-    at = edit.range[1];
-  }
-  return result + text.slice(at, end);
 }
 
 function indentOf(sourceCode: SourceCode, node: TSESTree.Node): string {

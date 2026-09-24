@@ -1,4 +1,5 @@
 import { AST_NODE_TYPES, AST_TOKEN_TYPES, type TSESLint, type TSESTree } from "@typescript-eslint/utils";
+import { LINE_BREAK } from "./ast.ts";
 
 export type FunctionNode =
   | TSESTree.ArrowFunctionExpression
@@ -45,7 +46,7 @@ export function directiveInsertion(
     return { at: brace, text: next?.range[0] === brace ? ' "use hermetic"; ' : ' "use hermetic";' };
   }
   // Only whitespace separates the brace from the next line: start a line of its own, in the body's line-break style.
-  const lineBreak = /\r\n|[\n\r\u2028\u2029]/.exec(sourceCode.text.slice(brace, next.range[0]));
+  const lineBreak = LINE_BREAK.exec(sourceCode.text.slice(brace, next.range[0]));
   const at = brace + (lineBreak?.index ?? 0);
   const indent = lineIndent(sourceCode, next.loc.start.line);
   const closing = next.range[0] === body.range[1] - 1;

@@ -55,6 +55,11 @@ const R = 2;`,
 export function f(a: number) { return clamp(a); }`, options: lift },
     { name: "a function declaration reading a global", code: `export function now() { return Date.now(); }`, options: lift },
     {
+      name: "a default that calls a function, which the core would call again if it returned undefined",
+      code: `const R = 1;\ndeclare function fallback(): undefined;\nexport const f = (x = fallback()) => [x, R];`,
+      options: lift,
+    },
+    {
       name: "a function that inspects the stack, which gains a frame",
       code: `const R = 1;
 export const where = () => new Error(String(R)).stack;`,
@@ -183,6 +188,42 @@ export const where = () => new Error(String(R)).stack;`,
       errors: [{ messageId: "liftable", data: { fn: "f", names: "R" } }],
     },
     {
+      name: "comments in the parameter list and after the arrow survive",
+      code: `const R = 1;\nexport const f = (a: number, // the amount\n  b: number) => /* scaled */ (a + b) * R;`,
+      output: [
+        `const R = 1;`,
+        `export const f = (a: number, b: number) => fHermetic.call({ R }, a, b);`,
+        ``,
+        `function fHermetic(this: { R: typeof R }, a: number, // the amount`,
+        `  b: number) {`,
+        `  "use hermetic";`,
+        `  return /* scaled */ (a + b) * this.R;`,
+        `}`,
+      ].join("\n"),
+      options: lift,
+      errors: [{ messageId: "liftable", data: { fn: "f", names: "R" } }],
+    },
+    {
+      name: "a comment that continues past the binding's line stays a comment",
+      code: `export const f = () => R; /* a note\nthat continues */\nconst R = 1;`,
+      output: [
+        `export const f = () => fHermetic.call(fContext);`,
+        ``,
+        `const fContext = {`,
+        `  get R(): typeof R { return R; },`,
+        `};`,
+        ``,
+        `function fHermetic(this: { R: typeof R }) {`,
+        `  "use hermetic";`,
+        `  return this.R;`,
+        `} /* a note`,
+        `that continues */`,
+        `const R = 1;`,
+      ].join("\n"),
+      options: lift,
+      errors: [{ messageId: "liftable", data: { fn: "f", names: "R" } }],
+    },
+    {
       name: "plain JavaScript gets no type annotations",
       code: `let count = 0;\nconst bump = (by) => {\n  count += by;\n  return count;\n};`,
       output: [
@@ -301,6 +342,11 @@ describe("lift semantics", () => {
     {
       name: "a binding called during setup, before a constant it reads on another path",
       code: `const pick = (late: boolean) => (late ? LATER : 0);\nconst early = pick(false);\nconst LATER = 1;\nconst probe = () => [early, pick(true)];`,
+      probe: "probe",
+    },
+    {
+      name: "a binding called later on its own line finds its context",
+      code: `let R = 1;\nconst f = () => R + 1; const early = f();\nconst probe = () => [early, f()];`,
       probe: "probe",
     },
     {

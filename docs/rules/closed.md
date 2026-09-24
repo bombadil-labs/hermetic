@@ -97,7 +97,7 @@ function total(invoice: Invoice) {
 | `shadowedGround` | A ground name resolves to a binding declared in an enclosing scope, such as an import or a local. Ambient `declare` statements do not count. |
 | `groundWrite` | The function assigns to a ground name. |
 | `deniedPath` | A static member chain or destructuring pattern reaches a denied path, such as `Math.random`. |
-| `aliasedGround` | With `aliasing: "forbid"`: a ground object that has denied members is used other than by static member access or destructuring. |
+| `aliasedGround` | With `aliasing: "forbid"`: a ground object that has denied members is used in a way that could hand it elsewhere. |
 | `typeReference` | With `types: "structural-only"`: a type reference resolves to a declaration outside the function. |
 | `lexicalThis`, `lexicalNewTarget` | `this` or `new.target` inside an isolated arrow function, or inside an arrow nested in one, before any function that rebinds it. |
 | `superReference` | `super` whose home object lies outside the isolated function. |
@@ -123,12 +123,12 @@ type Options = {
 
 ### `ground`
 
-A path to a ground bootstrap module, absolute or relative to ESLint's working directory, or a `file:` URL. Without it, the default ground applies. The bootstrap is the export named `ground`, or else the default export. It must itself be marked isolated. It is linted with this rule, on the default ground, before it runs. See the [README](../../README.md#the-ground).
+A path to a ground bootstrap module, absolute or relative to ESLint's working directory, or a `file:` URL. Without it, the default ground applies. The bootstrap is the export named `ground`, or else the default export. It must itself be marked isolated. It is linted with this rule, on the default ground, before it runs, and it may only use TypeScript syntax that erases cleanly. See the [README](../../README.md#the-ground).
 
 ### `aliasing`
 
 - `"best-effort"` (default): denied paths are reported where they are statically visible. `const m = Math; m.random()` is not caught.
-- `"forbid"`: a ground object with denied members may only be used through static member access (`Math.max`) or destructuring (`const { max } = Math`). Aliases (`const m = Math`), dynamic keys (`Math[key]`), rest elements and passing the object along (`f(Math)`) are reported. `typeof Math` is allowed.
+- `"forbid"`: a ground object with denied members may only be used in place: static member access (`Math.max`), destructuring (`const { max } = Math`), `typeof`, calling or constructing it (`new Date(0)`), comparisons, and `instanceof` or `in` tests. Aliases (`const m = Math`), dynamic keys (`Math[key]`), rest elements and passing the object along (`f(Math)`) are reported.
 
 ## When not to use it
 

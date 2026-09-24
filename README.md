@@ -24,7 +24,7 @@ An isolated function's whole world arrives through two doors, so anything standi
 npm install --save-dev eslint-plugin-isolated
 ```
 
-Peer dependencies: `eslint` 9 or 10, `@typescript-eslint/parser` 8, and `typescript`.
+Requires Node 22.13+ or 24+. Peer dependencies: `eslint` 9 or 10, and `@typescript-eslint/parser` 8.
 
 ```js
 // eslint.config.js
@@ -138,10 +138,10 @@ isolated.configs.recommended,
 The plugin loads it in three steps:
 
 1. It lints the bootstrap with the rule itself, on the default ground, and refuses to load it unless it is marked isolated and passes. Suppression comments are ignored here.
-2. It strips types and evaluates the function's source text alone, in a fresh `node:vm` context with string compilation disabled and a one-second timeout. The lint is what makes this reasonable: the function touches nothing but the realm it is handed. A vm context is not a security boundary.
+2. It erases the function's TypeScript syntax and evaluates its source text alone, in a fresh `node:vm` context with string compilation disabled and a one-second timeout. The lint is what makes this reasonable: the function touches nothing but the realm it is handed. A vm context is not a security boundary.
 3. It reads the keys of `allow` and the paths in `deny`. Only keys matter to the linter.
 
-The bootstrap is found as the export named `ground`, or else the default export. [`examples/isolated.ground.ts`](examples/isolated.ground.ts) spells out the default ground, as a starting point to copy.
+The bootstrap is found as the export named `ground`, or else the default export. It may use TypeScript syntax that erases cleanly: annotations, `as`, `satisfies`, `!`, generics and local type declarations. Erasure keeps every line and column in place, so errors point into your file. Syntax that needs a compiler, such as enums and namespaces, is refused. [`examples/isolated.ground.ts`](examples/isolated.ground.ts) spells out the default ground, as a starting point to copy.
 
 The same file can serve at runtime. The entry point calls `ground(globalThis)`, for example to build Compartment globals, so lint time and runtime share one definition of the ground. **Keep it a literal list.** At lint time, `realm` is a bare JavaScript realm, so a bootstrap that enumerates `realm` would see different names than it sees at runtime.
 
@@ -153,7 +153,7 @@ Denied paths are checked through static member access (`Math.random`, `Math["ran
 
 Statically, they are best effort. `const m = Math; m.random()` evades the check. There are two ways to close the gap:
 
-- Set `aliasing: "forbid"`. A ground object with denied members may then only be used through static member access or destructuring. `const m = Math`, `Math[key]` and `f(Math)` are reported.
+- Set `aliasing: "forbid"`. A ground object with denied members may then only be used in place: static member access, destructuring, `typeof`, calling or constructing it, and comparisons. Anything that could hand it elsewhere, such as `const m = Math`, `Math[key]` or `f(Math)`, is reported.
 - Leave the whole object out of the ground, and inject what you need through `this`.
 
 ## Options
@@ -208,4 +208,8 @@ npm run check   # typecheck, lint, test
 npm run build   # emit dist/
 ```
 
-The repository lints itself with the rule. The plugin's own pure helpers, such as the ground functions in [`src/ground/ground.ts`](src/ground/ground.ts), are marked `"use isolated"`.
+Development needs Node 22.18 or later, because `eslint.config.js` loads the plugin's TypeScript source directly. The repository lints itself with the rule. The plugin's own pure helpers, such as the ground functions in [`src/ground/ground.ts`](src/ground/ground.ts), are marked `"use isolated"`.
+
+## License
+
+[MIT](LICENSE)

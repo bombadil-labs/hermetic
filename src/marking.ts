@@ -29,6 +29,37 @@ export function hasHermeticDirective(node: FunctionNode): boolean {
 }
 
 /**
+ * Where a `"use hermetic"` directive goes in a block body: straight after the
+ * opening brace. Every comment keeps its line and the statement it precedes,
+ * so a `// @ts-expect-error` or `// eslint-disable-next-line` above the first
+ * statement still reaches it, and a comment trailing the brace stays on the
+ * brace's line.
+ */
+export function directiveInsertion(
+  body: TSESTree.BlockStatement,
+  sourceCode: Readonly<TSESLint.SourceCode>,
+): { at: number; text: string } {
+  const brace = body.range[0] + 1;
+  const next = sourceCode.getTokenAfter(sourceCode.getFirstToken(body) ?? body, { includeComments: true });
+  if (!next || next.loc.start.line === body.loc.start.line) {
+    return { at: brace, text: next?.range[0] === brace ? ' "use hermetic"; ' : ' "use hermetic";' };
+  }
+  // Only whitespace separates the brace from the next line: start a line of its own, in the body's line-break style.
+  const lineBreak = /\r\n|[\n\r\u2028\u2029]/.exec(sourceCode.text.slice(brace, next.range[0]));
+  const at = brace + (lineBreak?.index ?? 0);
+  const indent = lineIndent(sourceCode, next.loc.start.line);
+  const closing = next.range[0] === body.range[1] - 1;
+  return {
+    at,
+    text: `${lineBreak?.[0] ?? "\n"}${closing ? `${indent}${indent.includes("\t") ? "\t" : "  "}` : indent}"use hermetic";`,
+  };
+}
+
+function lineIndent(sourceCode: Readonly<TSESLint.SourceCode>, line: number): string {
+  return /^\s*/.exec(sourceCode.lines[line - 1] ?? "")?.[0] ?? "";
+}
+
+/**
  * True when a JSDoc block directly before the function, or before the
  * declaration that introduces it, has an `@hermetic` tag.
  */

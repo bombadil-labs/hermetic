@@ -1,31 +1,31 @@
 # Releasing
 
-Versions of `eslint-plugin-hermetic` are published to npm by the [Release workflow](.github/workflows/release.yml) when a GitHub release is published. It uses npm's [trusted publishing](https://docs.npmjs.com/trusted-publishers): npm accepts the workflow's OpenID Connect token instead of a stored secret, so no npm token lives in the repository or its settings, and each version carries a provenance attestation that links it to the run that built it.
+Versions of `@bombadil/hermetic` are published to npm by the [Release workflow](.github/workflows/release.yml) when a GitHub release is published. It uses npm's [trusted publishing](https://docs.npmjs.com/trusted-publishers): npm accepts the workflow's OpenID Connect token instead of a stored secret, so no npm token lives in the repository or its settings, and each version carries a provenance attestation that links it to the run that built it.
 
 ## One-time setup
 
-1. **Publish the first version by hand.** npm attaches a trusted publisher only to a package that already exists. On a clean checkout of `main`, with Node 22.18 or later and two-factor authentication on your npm account:
+1. **Publish the first version by hand.** npm attaches a trusted publisher only to a package that already exists. On a clean checkout of `main`, with Node 22.18 or later, two-factor authentication on your npm account, and publish rights in the `bombadil` npm organization, which also owns `@bombadil/loam`:
 
    ```sh
    npm login
    npm publish
    ```
 
-   `prepublishOnly` runs the full check and a clean build first. This first version is the only one without provenance.
+   `prepublishOnly` runs the full check and a clean build first. `publishConfig` makes the scoped package public. This first version is the only one without provenance.
 
 2. **Trust the Release workflow.** On npmjs.com, open the package's settings, and under trusted publishing add GitHub Actions with:
 
    | Field | Value |
    | --- | --- |
    | Organization or user | `bombadil-labs` |
-   | Repository | `ts-isolated` |
+   | Repository | `hermetic` |
    | Workflow filename | `release.yml` |
    | Environment | `npm` |
 
    Or, with npm 11.15 or later:
 
    ```sh
-   npm trust github eslint-plugin-hermetic --repo bombadil-labs/ts-isolated --file release.yml --env npm --allow-publish
+   npm trust github @bombadil/hermetic --repo bombadil-labs/hermetic --file release.yml --env npm --allow-publish
    ```
 
    A trusted publisher cannot be edited, only deleted and added again, so rename the repository first if you are going to.

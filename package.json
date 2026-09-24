@@ -1,11 +1,11 @@
 {
-  "name": "eslint-plugin-hermetic",
+  "name": "@bombadil/hermetic",
   "version": "0.1.0",
   "description": "Lint rule for hermetic functions: functions that touch the world only through their arguments and `this`.",
   "license": "MIT",
-  "homepage": "https://github.com/bombadil-labs/ts-isolated#readme",
+  "homepage": "https://github.com/bombadil-labs/hermetic#readme",
   "bugs": {
-    "url": "https://github.com/bombadil-labs/ts-isolated/issues"
+    "url": "https://github.com/bombadil-labs/hermetic/issues"
   },
   "type": "module",
   "main": "./dist/index.js",
@@ -43,7 +43,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/bombadil-labs/ts-isolated.git"
+    "url": "git+https://github.com/bombadil-labs/hermetic.git"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "engines": {
     "node": "^22.13.0 || >=24"

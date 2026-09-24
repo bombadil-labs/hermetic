@@ -1,4 +1,4 @@
-# eslint-plugin-hermetic
+# hermetic
 
 **A hermetic function depends only on what it is handed: its arguments, `this`, and a small, explicitly configured *ground* of harmless globals.** The name comes from hermetic builds, which depend only on their declared inputs, and that is what makes them cacheable and runnable anywhere. A hermetic function is not a pure function. It may mutate and cause effects, but only through what it was handed. This plugin enforces the idea with `hermetic/sealed`, and `hermetic/prefer-hermetic` finds the functions to mark, or splits them so that they can be.
 
@@ -21,7 +21,7 @@ A hermetic function's whole world arrives through two doors, so anything standin
 ## Install
 
 ```sh
-npm install --save-dev eslint-plugin-hermetic
+npm install --save-dev @bombadil/hermetic
 ```
 
 Requires Node 22.13+ or 24+. Peer dependencies: `eslint` 9 or 10, and `@typescript-eslint/parser` 8.
@@ -30,7 +30,7 @@ Requires Node 22.13+ or 24+. Peer dependencies: `eslint` 9 or 10, and `@typescri
 // eslint.config.js
 import { defineConfig } from "eslint/config";
 import tseslint from "typescript-eslint";
-import hermetic from "eslint-plugin-hermetic";
+import hermetic from "@bombadil/hermetic";
 
 export default defineConfig(
   ...tseslint.configs.recommended,

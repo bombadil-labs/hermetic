@@ -22,7 +22,7 @@ export type { MessageIds } from "../analysis.ts";
 export type SealedOptions = HermeticSettings;
 
 export const createRule = ESLintUtils.RuleCreator(
-  (name) => `https://github.com/bombadil-labs/ts-isolated/blob/main/docs/rules/${name}.md`,
+  (name) => `https://github.com/bombadil-labs/hermetic/blob/main/docs/rules/${name}.md`,
 );
 
 // Annotated because the rule lints ground bootstraps with itself, so it refers to its own value.

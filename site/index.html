@@ -81,7 +81,7 @@ export const applyPricing = applyDiscount.bind(pricing);</pre>
             </div>
             <div class="card">
               <h3>Mocks, traces, replays</h3>
-              <p>Wrap <code>this</code> in a Proxy and you have a complete log of every effect the function can have, with no instrumentation inside it.</p>
+              <p>Wrap <code>this</code> in a Proxy and you log every use of the authority the function was granted, with no instrumentation inside it.</p>
             </div>
             <div class="card">
               <h3>Authority audits</h3>
@@ -108,7 +108,7 @@ export const applyPricing = applyDiscount.bind(pricing);</pre>
           <pre data-lang="sh">npx eslint --fix --rule '{"hermetic/prefer-hermetic": ["warn", {"lift": true}]}' src/</pre>
           <!-- example @tanstack/query-core/src/utils.ts#hashQueryKeyByOptions -->
           <div class="stats">
-            <div class="stat"><span class="value">{{total.candidates}}</span><span class="label">functions in Effect, RxJS and TanStack Query</span></div>
+            <div class="stat"><span class="value">{{total.candidates}}</span><span class="label">named functions across Effect, RxJS and TanStack Query</span></div>
             <div class="stat"><span class="value">{{total.hermeticPct}}</span><span class="label">already hermetic: marked</span></div>
             <div class="stat"><span class="value">{{total.liftedPct}}</span><span class="label">lifted into a hermetic core</span></div>
             <div class="stat"><span class="value">{{total.typeErrorsIntroduced}}</span><span class="label">new type errors</span></div>

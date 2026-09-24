@@ -48,31 +48,75 @@ export interface LiftPlan {
   readonly contextName?: string;
 }
 
+/** Why a function was not lifted: the first check it failed. */
+export type LiftBlocker =
+  | "structural-only types"
+  | "a method or object member"
+  | "not declared at module level"
+  | "a named function expression"
+  | "a typed variable"
+  | "several declarators"
+  | "a this parameter or asserts"
+  | "uses its own this, arguments or new.target"
+  | "suppresses type errors"
+  | "a default reads a destructured parameter"
+  | "a default calls a function"
+  | "a generic rest parameter"
+  | "an inline key-remapped mapped type"
+  | "reads the stack"
+  | "JSX"
+  | "lexical this or new.target"
+  | "super"
+  | "import.meta or import()"
+  | "writes a ground name"
+  | "writes a constant or import"
+  | "a lifted name inside a nested function or class"
+  | "a const enum"
+  | "a declaration that reads unsettled names"
+  | "another escape";
+
 /**
  * Decides whether `fn` can be split into a hermetic core and a binding without
  * changing behavior, and what moves into the context. Returns undefined when a
- * person should decide: `this`, `arguments`, `super`, `import.meta`, JSX,
- * writes to constants, and anything not declared at module level.
+ * person should decide; `tryLift` says why.
  */
 export function planLift(fn: FunctionNode, problems: readonly Problem[], env: Environment): LiftPlan | undefined {
-  if (env.structuralOnly) return undefined;
+  const result = tryLift(fn, problems, env);
+  return typeof result === "string" ? undefined : result;
+}
+
+/** What `tryLift` may assume beyond what the lift does. */
+export interface LiftAssumptions {
+  /**
+   * Imported bindings are initialized before any function that reads them
+   * runs, and do not change while it runs. An import cycle breaks the first
+   * and an exported `let` the second, so the lift does not assume it; the
+   * corpus report does, to count what an opt-in would change.
+   */
+  readonly importsSettled?: boolean;
+}
+
+/** The lift's plan for `fn`, or the reason it has none. */
+export function tryLift(
+  fn: FunctionNode,
+  problems: readonly Problem[],
+  env: Environment,
+  assumptions: LiftAssumptions = {},
+): LiftPlan | LiftBlocker {
+  if (env.structuralOnly) return "structural-only types";
   const site = liftSite(fn);
-  if (
-    !site ||
-    usesOwnReceiver(fn, env) ||
-    suppressesTypeErrors(fn, env) ||
-    defaultReadsPattern(fn) ||
-    defaultMayRunTwice(fn, env) ||
-    !forwardsRestExactly(fn) ||
-    remapsKeysInline(fn, env) ||
-    inspectsStack(fn, env)
-  ) {
-    return undefined;
-  }
+  if (typeof site === "string") return site;
+  if (usesOwnReceiver(fn, env)) return "uses its own this, arguments or new.target";
+  if (suppressesTypeErrors(fn, env)) return "suppresses type errors";
+  if (defaultReadsPattern(fn)) return "a default reads a destructured parameter";
+  if (defaultMayRunTwice(fn, env)) return "a default calls a function";
+  if (!forwardsRestExactly(fn)) return "a generic rest parameter";
+  if (remapsKeysInline(fn, env)) return "an inline key-remapped mapped type";
+  if (inspectsStack(fn, env)) return "reads the stack";
 
   const references: Reference[] = [];
   for (const problem of problems) {
-    if (!problem.reference || !LIFTABLE.has(problem.messageId)) return undefined;
+    if (!problem.reference || !LIFTABLE.has(problem.messageId)) return PROBLEM_BLOCKERS[problem.messageId] ?? "another escape";
     references.push(problem.reference);
   }
   // Once the body moves into the core, a declaration's calls to itself must go through the public binding.
@@ -84,13 +128,14 @@ export function planLift(fn: FunctionNode, problems: readonly Problem[], env: En
       }
     }
   }
-  if (references.length === 0) return undefined;
+  if (references.length === 0) return "not declared at module level";
 
   const lifted = new Map<string, Lifted>();
   const identifiers: TSESTree.Identifier[] = [];
   for (const reference of references) {
-    const entry = classify(reference, site);
-    if (!entry || !readsCoreThis(reference.identifier, fn)) return undefined;
+    const entry = classify(reference, site, assumptions);
+    if (typeof entry === "string") return entry;
+    if (!readsCoreThis(reference.identifier, fn)) return "a lifted name inside a nested function or class";
     const existing = lifted.get(entry.name);
     if (existing) {
       existing.writable ||= entry.writable;
@@ -104,7 +149,7 @@ export function planLift(fn: FunctionNode, problems: readonly Problem[], env: En
   }
   const direct = [...lifted.values()].every((entry) => entry.direct);
   // A function declaration can run before any statement of its module, a shared context's included.
-  if (!direct && site.hoisted) return undefined;
+  if (!direct && site.hoisted) return "a declaration that reads unsettled names";
   const coreName = freshName(`${site.name}Hermetic`, env, fn);
   const contextName = direct ? undefined : freshName(`${site.name}Context`, env, fn);
   return { fn, coreName, statement: site.statement, lifted, identifiers, contextName };
@@ -119,13 +164,20 @@ interface LiftSite {
 }
 
 /** Only module-level declarations and single `const`/`let` initializers keep their callers intact. */
-function liftSite(fn: FunctionNode): LiftSite | undefined {
-  if (fn.params.some((param) => param.type === AST_NODE_TYPES.Identifier && param.name === "this")) return undefined;
+function liftSite(fn: FunctionNode): LiftSite | LiftBlocker {
+  const parent = fn.parent;
+  if (
+    parent.type === AST_NODE_TYPES.Property ||
+    parent.type === AST_NODE_TYPES.MethodDefinition ||
+    parent.type === AST_NODE_TYPES.PropertyDefinition
+  ) {
+    return "a method or object member";
+  }
+  if (fn.params.some((param) => param.type === AST_NODE_TYPES.Identifier && param.name === "this")) return "a this parameter or asserts";
   const returns = fn.returnType?.typeAnnotation;
-  if (returns?.type === AST_NODE_TYPES.TSTypePredicate && returns.asserts) return undefined;
+  if (returns?.type === AST_NODE_TYPES.TSTypePredicate && returns.asserts) return "a this parameter or asserts";
   if (fn.type === AST_NODE_TYPES.FunctionDeclaration) {
-    const parent = fn.parent;
-    if (!fn.id) return undefined;
+    if (!fn.id) return "not declared at module level";
     if (parent.type === AST_NODE_TYPES.Program) return { name: fn.id.name, statement: fn, hoisted: true };
     if (
       (parent.type === AST_NODE_TYPES.ExportNamedDeclaration || parent.type === AST_NODE_TYPES.ExportDefaultDeclaration) &&
@@ -133,24 +185,35 @@ function liftSite(fn: FunctionNode): LiftSite | undefined {
     ) {
       return { name: fn.id.name, statement: parent, hoisted: true };
     }
-    return undefined;
+    return "not declared at module level";
   }
   // A named function expression binds its own name, which the core could not see.
-  if (fn.type === AST_NODE_TYPES.FunctionExpression && fn.id) return undefined;
-  const declarator = fn.parent;
-  if (declarator.type !== AST_NODE_TYPES.VariableDeclarator || declarator.init !== fn) return undefined;
-  if (declarator.id.type !== AST_NODE_TYPES.Identifier) return undefined;
+  if (fn.type === AST_NODE_TYPES.FunctionExpression && fn.id) return "a named function expression";
+  if (parent.type !== AST_NODE_TYPES.VariableDeclarator || parent.init !== fn) return "not declared at module level";
+  if (parent.id.type !== AST_NODE_TYPES.Identifier) return "not declared at module level";
   // `const f: Fn = (x) => ...` types the function, and what it returns, from `Fn`; the core would lose that context.
-  if (declarator.id.typeAnnotation) return undefined;
-  const declaration = declarator.parent;
-  if (declaration.type !== AST_NODE_TYPES.VariableDeclaration || declaration.declarations.length !== 1) return undefined;
+  if (parent.id.typeAnnotation) return "a typed variable";
+  const declaration = parent.parent;
+  if (declaration.type !== AST_NODE_TYPES.VariableDeclaration) return "not declared at module level";
+  if (declaration.declarations.length !== 1) return "several declarators";
   const outer = declaration.parent;
-  if (outer.type === AST_NODE_TYPES.Program) return { name: declarator.id.name, statement: declaration, hoisted: false };
+  if (outer.type === AST_NODE_TYPES.Program) return { name: parent.id.name, statement: declaration, hoisted: false };
   if (outer.type === AST_NODE_TYPES.ExportNamedDeclaration && outer.parent.type === AST_NODE_TYPES.Program) {
-    return { name: declarator.id.name, statement: outer, hoisted: false };
+    return { name: parent.id.name, statement: outer, hoisted: false };
   }
-  return undefined;
+  return "not declared at module level";
 }
+
+/** Problems the lift cannot resolve, by the reason they give. */
+const PROBLEM_BLOCKERS: Partial<Record<MessageIds, LiftBlocker>> = {
+  jsx: "JSX",
+  lexicalThis: "lexical this or new.target",
+  lexicalNewTarget: "lexical this or new.target",
+  superReference: "super",
+  importMeta: "import.meta or import()",
+  dynamicImport: "import.meta or import()",
+  groundWrite: "writes a ground name",
+};
 
 /** `@ts-expect-error` and `@ts-ignore` target lines that move; the author should decide. */
 function suppressesTypeErrors(fn: FunctionNode, env: Environment): boolean {
@@ -293,15 +356,15 @@ function readsCoreThis(node: TSESTree.Node, fn: FunctionNode): boolean {
   return true;
 }
 
-function classify(reference: Reference, site: LiftSite): Lifted | undefined {
+function classify(reference: Reference, site: LiftSite, assumptions: LiftAssumptions): Lifted | LiftBlocker {
   const identifier = reference.identifier;
-  if (identifier.type !== AST_NODE_TYPES.Identifier) return undefined;
+  if (identifier.type !== AST_NODE_TYPES.Identifier) return "not declared at module level";
   const name = identifier.name;
-  if (name === "arguments" || name === "__proto__") return undefined;
+  if (name === "arguments" || name === "__proto__") return "uses its own this, arguments or new.target";
   const variable = reference.resolved;
   // No definition, or only `declare` statements describing it: a global.
   if (!variable || variable.defs.every(isAmbient)) {
-    if (reference.isWrite()) return undefined;
+    if (reference.isWrite()) return "writes a constant or import";
     const parent = identifier.parent;
     return {
       name,
@@ -314,17 +377,17 @@ function classify(reference: Reference, site: LiftSite): Lifted | undefined {
       guarded: parent.type === AST_NODE_TYPES.UnaryExpression && parent.operator === "typeof",
     };
   }
-  if (variable.scope.type !== "module" && variable.scope.type !== "global") return undefined;
-  if (reference.isWrite() && !isReassignable(variable)) return undefined;
+  if (variable.scope.type !== "module" && variable.scope.type !== "global") return "not declared at module level";
+  if (reference.isWrite() && !isReassignable(variable)) return "writes a constant or import";
   // A const enum is inlined by the compiler and cannot be read as a value.
-  if (variable.defs.some((def) => def.node.type === AST_NODE_TYPES.TSEnumDeclaration && def.node.const)) return undefined;
+  if (variable.defs.some((def) => def.node.type === AST_NODE_TYPES.TSEnumDeclaration && def.node.const)) return "a const enum";
   return {
     name,
     global: false,
     writable: reference.isWrite(),
     callsHost: false,
     guarded: false,
-    direct: !reference.isWrite() && isSettled(variable, site),
+    direct: !reference.isWrite() && isSettled(variable, site, assumptions),
     widened: widenedType(variable),
   };
 }
@@ -336,7 +399,7 @@ function classify(reference: Reference, site: LiftSite): Lifted | undefined {
  * declaration that finishes before that statement has run by then. Named
  * imports are live and may not be initialized yet in an import cycle.
  */
-function isSettled(variable: TSESLint.Scope.Variable, site: LiftSite): boolean {
+function isSettled(variable: TSESLint.Scope.Variable, site: LiftSite, assumptions: LiftAssumptions): boolean {
   if (variable.references.some((reference) => reference.isWrite() && !reference.init)) return false;
   const values = variable.defs.filter((def) => def.type !== "Type");
   if (values.length > 0 && values.every((def) => def.type === "FunctionName")) return true;
@@ -344,7 +407,7 @@ function isSettled(variable: TSESLint.Scope.Variable, site: LiftSite): boolean {
   if (!def || others.length > 0) return false;
   switch (def.type) {
     case "ImportBinding":
-      return def.node.type === AST_NODE_TYPES.ImportNamespaceSpecifier;
+      return assumptions.importsSettled === true || def.node.type === AST_NODE_TYPES.ImportNamespaceSpecifier;
     case "Variable":
     case "ClassName":
       return !site.hoisted && (def.parent ?? def.node).range[1] <= site.statement.range[0];
@@ -544,7 +607,7 @@ export function liftFix(
   const callee = typeArguments.length > 0 ? `(${plan.coreName}<${typeArguments.join(", ")}>)` : plan.coreName;
   const context = plan.contextName ?? `{ ${lifted.map((entry) => entry.name).join(", ")} }`;
   const call = `${callee}.call(${[context, ...forwarded].join(", ")})`;
-  const bindingSignature = `${raw(fn.typeParameters)}(${bindingParams.join(", ")})${raw(fn.returnType)}`;
+  const bindingSignature = `${raw(fn.typeParameters)}(${layoutParameters(bindingParams, fn, sourceCode)})${raw(fn.returnType)}`;
   const binding =
     fn.type === AST_NODE_TYPES.ArrowFunctionExpression
       ? `${bindingSignature} => ${call}`
@@ -585,6 +648,22 @@ function declarationSite(statement: TSESTree.Node, sourceCode: SourceCode): numb
 
 function isComment(token: TSESTree.Token): token is TSESTree.Comment {
   return token.type === AST_TOKEN_TYPES.Line || token.type === AST_TOKEN_TYPES.Block;
+}
+
+/**
+ * The binding's parameters, laid out like the original list: one per line
+ * when the original put its first parameter on a line of its own, with a
+ * trailing comma only if it had one.
+ */
+function layoutParameters(params: readonly string[], fn: FunctionNode, sourceCode: SourceCode): string {
+  const [start, end] = parameterSpan(fn, sourceCode);
+  const span = sourceCode.text.slice(start, end);
+  const first = fn.params[0];
+  if (!first || !LINE_BREAK.test(/^\s*/.exec(span)?.[0] ?? "")) return params.join(", ");
+  const indent = indentOf(sourceCode, first);
+  const closing = /[^\S\r\n]*$/.exec(span)?.[0] ?? "";
+  const trailing = /,\s*$/.test(span) ? "," : "";
+  return `\n${params.map((param, index) => `${indent}${param}${index < params.length - 1 ? "," : trailing}`).join("\n")}\n${closing}`;
 }
 
 /** Adds the context parameter in front of the others, following their layout. */

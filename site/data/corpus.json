@@ -1,0 +1,347 @@
+{
+  "generated": {
+    "date": "2026-09-24T21:35:26.499Z",
+    "commit": "a4c8140",
+    "dirty": false,
+    "node": "v22.22.2"
+  },
+  "libraries": [
+    {
+      "id": "effect",
+      "name": "Effect",
+      "packages": [
+        {
+          "name": "effect",
+          "version": "3.22.2"
+        }
+      ],
+      "files": 362,
+      "candidates": 4634,
+      "hermetic": 1020,
+      "hermeticMembers": 626,
+      "direct": 1451,
+      "shared": 973,
+      "skipped": 1190,
+      "reasons": [
+        {
+          "reason": "a method or object member",
+          "count": 954
+        },
+        {
+          "reason": "a typed variable",
+          "count": 90
+        },
+        {
+          "reason": "a lifted name inside a nested function or class",
+          "count": 58
+        },
+        {
+          "reason": "a declaration that reads unsettled names",
+          "count": 51
+        },
+        {
+          "reason": "reads the stack",
+          "count": 12
+        },
+        {
+          "reason": "suppresses type errors",
+          "count": 10
+        },
+        {
+          "reason": "an inline key-remapped mapped type",
+          "count": 6
+        },
+        {
+          "reason": "a default calls a function",
+          "count": 5
+        },
+        {
+          "reason": "a generic rest parameter",
+          "count": 3
+        },
+        {
+          "reason": "uses its own this, arguments or new.target",
+          "count": 1
+        }
+      ],
+      "hoistedOnlyImports": 4,
+      "unnamed": 1962,
+      "unnamedPassedTo": {
+        "dual": 1711,
+        "globalValue": 53,
+        "make": 15,
+        "withSTMRuntime": 12,
+        "flatMap": 11
+      },
+      "validation": {
+        "filesChanged": 235,
+        "parseErrors": 0,
+        "sealedErrors": 0,
+        "unsettledFiles": 0,
+        "typeErrorsIntroduced": 0,
+        "folded": 2424,
+        "roundTripSkipped": 0,
+        "roundTripDiffering": 0,
+        "roundTripTypeErrorsIntroduced": 0
+      },
+      "examples": [
+        {
+          "file": "effect/src/Arbitrary.ts",
+          "name": "absurd",
+          "line": 746,
+          "outcome": "hermetic",
+          "before": "function absurd(message: string): LazyArbitrary<any> {\n  return () => {\n    throw new Error(message)\n  }\n}",
+          "after": "function absurd(message: string): LazyArbitrary<any> {\n  \"use hermetic\";\n  return () => {\n    throw new Error(message)\n  }\n}"
+        },
+        {
+          "file": "effect/src/internal/schedule/interval.ts",
+          "name": "after",
+          "line": 94,
+          "outcome": "direct",
+          "before": "export const after = (startMilliseconds: number): Interval.Interval => {\n  return make(startMilliseconds, Number.POSITIVE_INFINITY)\n}",
+          "after": "export const after = (startMilliseconds: number): Interval.Interval => afterHermetic.call({ make }, startMilliseconds)\n\nfunction afterHermetic(this: { make: typeof make }, startMilliseconds: number): Interval.Interval {\n  \"use hermetic\";\n  return this.make(startMilliseconds, Number.POSITIVE_INFINITY)\n}"
+        },
+        {
+          "file": "effect/src/Array.ts",
+          "name": "tail",
+          "line": 1194,
+          "outcome": "shared",
+          "before": "export const tail = <A>(self: Iterable<A>): Option.Option<Array<A>> => {\n  const input = fromIterable(self)\n  return isNonEmptyReadonlyArray(input) ? Option.some(tailNonEmpty(input)) : Option.none()\n}",
+          "after": "export const tail = <A>(self: Iterable<A>): Option.Option<Array<A>> => (tailHermetic<A>).call(tailContext, self)\n\nconst tailContext = {\n  get fromIterable(): typeof fromIterable { return fromIterable; },\n  get isNonEmptyReadonlyArray(): typeof isNonEmptyReadonlyArray { return isNonEmptyReadonlyArray; },\n  get Option(): typeof Option { return Option; },\n  get tailNonEmpty(): typeof tailNonEmpty { return tailNonEmpty; },\n};\n\nfunction tailHermetic<A>(this: { fromIterable: typeof fromIterable; isNonEmptyReadonlyArray: typeof isNonEmptyReadonlyArray; Option: typeof Option; tailNonEmpty: typeof tailNonEmpty }, self: Iterable<A>): Option.Option<Array<A>> {\n  \"use hermetic\";\n  const input = this.fromIterable(self)\n  return this.isNonEmptyReadonlyArray(input) ? this.Option.some(this.tailNonEmpty(input)) : this.Option.none()\n}"
+        },
+        {
+          "file": "effect/src/internal/context.ts",
+          "name": "makeGenericTag",
+          "line": 69,
+          "outcome": "skipped",
+          "reason": "reads the stack",
+          "before": "export const makeGenericTag = <Identifier, Service = Identifier>(key: string): C.Tag<Identifier, Service> => {\n  const limit = Error.stackTraceLimit\n  Error.stackTraceLimit = 2\n  const creationError = new Error()\n  Error.stackTraceLimit = limit\n  const tag = Object.create(TagProto)\n  Object.defineProperty(tag, \"stack\", {\n    get() {\n      return creationError.stack\n    }\n  })\n  tag.key = key\n  return tag\n}"
+        }
+      ]
+    },
+    {
+      "id": "rxjs",
+      "name": "RxJS",
+      "packages": [
+        {
+          "name": "rxjs",
+          "version": "7.8.2"
+        }
+      ],
+      "files": 251,
+      "candidates": 406,
+      "hermetic": 70,
+      "hermeticMembers": 46,
+      "direct": 9,
+      "shared": 0,
+      "skipped": 327,
+      "reasons": [
+        {
+          "reason": "a declaration that reads unsettled names",
+          "count": 204
+        },
+        {
+          "reason": "a method or object member",
+          "count": 113
+        },
+        {
+          "reason": "uses its own this, arguments or new.target",
+          "count": 6
+        },
+        {
+          "reason": "a lifted name inside a nested function or class",
+          "count": 2
+        },
+        {
+          "reason": "a generic rest parameter",
+          "count": 2
+        }
+      ],
+      "hoistedOnlyImports": 171,
+      "unnamed": 15,
+      "unnamedPassedTo": {
+        "createErrorClass": 8,
+        "map": 1
+      },
+      "validation": {
+        "filesChanged": 45,
+        "parseErrors": 0,
+        "sealedErrors": 0,
+        "unsettledFiles": 0,
+        "typeErrorsIntroduced": 0,
+        "folded": 9,
+        "roundTripSkipped": 0,
+        "roundTripDiffering": 0,
+        "roundTripTypeErrorsIntroduced": 0
+      },
+      "examples": [
+        {
+          "file": "rxjs/src/internal/util/isFunction.ts",
+          "name": "isFunction",
+          "line": 5,
+          "outcome": "hermetic",
+          "before": "export function isFunction(value: any): value is (...args: any[]) => any {\n  return typeof value === 'function';\n}",
+          "after": "export function isFunction(value: any): value is (...args: any[]) => any {\n  \"use hermetic\";\n  return typeof value === 'function';\n}"
+        },
+        {
+          "file": "rxjs/src/internal/util/pipe.ts",
+          "name": "pipe",
+          "line": 78,
+          "outcome": "direct",
+          "before": "export function pipe(...fns: Array<UnaryFunction<any, any>>): UnaryFunction<any, any> {\n  return pipeFromArray(fns);\n}",
+          "after": "export function pipe(...fns: Array<UnaryFunction<any, any>>): UnaryFunction<any, any> {\n  return pipeHermetic.call({ pipeFromArray }, ...fns);\n}\n\nfunction pipeHermetic(this: { pipeFromArray: typeof pipeFromArray }, ...fns: Array<UnaryFunction<any, any>>): UnaryFunction<any, any> {\n  \"use hermetic\";\n  return this.pipeFromArray(fns);\n}"
+        },
+        {
+          "file": "rxjs/src/internal/operators/map.ts",
+          "name": "map",
+          "line": 47,
+          "outcome": "skipped",
+          "reason": "a declaration that reads unsettled names",
+          "before": "export function map<T, R>(project: (value: T, index: number) => R, thisArg?: any): OperatorFunction<T, R> {\n  return operate((source, subscriber) => {\n    // The index of the value from the source. Used with projection.\n    let index = 0;\n    // Subscribe to the source, all errors and completions are sent along\n    // to the consumer.\n    source.subscribe(\n      createOperatorSubscriber(subscriber, (value: T) => {\n        // Call the projection function with the appropriate this context,\n        // and send the resulting value to the consumer.\n        subscriber.next(project.call(thisArg, value, index++));\n      })\n    );\n  });\n}"
+        }
+      ]
+    },
+    {
+      "id": "tanstack-query",
+      "name": "TanStack Query",
+      "packages": [
+        {
+          "name": "@tanstack/query-core",
+          "version": "5.103.2"
+        },
+        {
+          "name": "@tanstack/react-query",
+          "version": "5.103.2"
+        }
+      ],
+      "files": 46,
+      "candidates": 275,
+      "hermetic": 121,
+      "hermeticMembers": 90,
+      "direct": 13,
+      "shared": 4,
+      "skipped": 137,
+      "reasons": [
+        {
+          "reason": "a method or object member",
+          "count": 98
+        },
+        {
+          "reason": "a declaration that reads unsettled names",
+          "count": 36
+        },
+        {
+          "reason": "JSX",
+          "count": 2
+        },
+        {
+          "reason": "a typed variable",
+          "count": 1
+        }
+      ],
+      "hoistedOnlyImports": 20,
+      "unnamed": 0,
+      "unnamedPassedTo": {},
+      "validation": {
+        "filesChanged": 29,
+        "parseErrors": 0,
+        "sealedErrors": 0,
+        "unsettledFiles": 0,
+        "typeErrorsIntroduced": 0,
+        "folded": 17,
+        "roundTripSkipped": 0,
+        "roundTripDiffering": 0,
+        "roundTripTypeErrorsIntroduced": 0
+      },
+      "examples": [
+        {
+          "file": "@tanstack/query-core/src/utils.ts",
+          "name": "addToEnd",
+          "line": 505,
+          "outcome": "hermetic",
+          "before": "export function addToEnd<T>(items: Array<T>, item: T, max = 0): Array<T> {\n  const newItems = [...items, item]\n  return max && newItems.length > max ? newItems.slice(1) : newItems\n}",
+          "after": "export function addToEnd<T>(items: Array<T>, item: T, max = 0): Array<T> {\n  \"use hermetic\";\n  const newItems = [...items, item]\n  return max && newItems.length > max ? newItems.slice(1) : newItems\n}"
+        },
+        {
+          "file": "@tanstack/query-core/src/utils.ts",
+          "name": "hashQueryKeyByOptions",
+          "line": 266,
+          "outcome": "direct",
+          "before": "export function hashQueryKeyByOptions<TQueryKey extends QueryKey = QueryKey>(\n  queryKey: TQueryKey,\n  options?: Pick<QueryOptions<any, any, any, any>, 'queryKeyHashFn'>,\n): string {\n  const hashFn = options?.queryKeyHashFn || hashKey\n  return hashFn(queryKey)\n}",
+          "after": "export function hashQueryKeyByOptions<TQueryKey extends QueryKey = QueryKey>(\n  queryKey: TQueryKey,\n  options?: Pick<QueryOptions<any, any, any, any>, 'queryKeyHashFn'>,\n): string {\n  return (hashQueryKeyByOptionsHermetic<TQueryKey>).call({ hashKey }, queryKey, options);\n}\n\nfunction hashQueryKeyByOptionsHermetic<TQueryKey extends QueryKey = QueryKey>(\n  this: { hashKey: typeof hashKey },\n  queryKey: TQueryKey,\n  options?: Pick<QueryOptions<any, any, any, any>, 'queryKeyHashFn'>,\n): string {\n  \"use hermetic\";\n  const hashFn = options?.queryKeyHashFn || this.hashKey\n  return hashFn(queryKey)\n}"
+        },
+        {
+          "file": "@tanstack/react-query/src/errorBoundaryUtils.ts",
+          "name": "useClearResetErrorBoundary",
+          "line": 43,
+          "outcome": "direct",
+          "before": "export const useClearResetErrorBoundary = (\n  errorResetBoundary: QueryErrorResetBoundaryValue,\n) => {\n  React.useEffect(() => {\n    errorResetBoundary.clearReset()\n  }, [errorResetBoundary])\n}",
+          "after": "export const useClearResetErrorBoundary = (\n  errorResetBoundary: QueryErrorResetBoundaryValue,\n) => useClearResetErrorBoundaryHermetic.call({ React }, errorResetBoundary)\n\nfunction useClearResetErrorBoundaryHermetic(\n  this: { React: typeof React },\n  errorResetBoundary: QueryErrorResetBoundaryValue,\n) {\n  \"use hermetic\";\n  this.React.useEffect(() => {\n    errorResetBoundary.clearReset()\n  }, [errorResetBoundary])\n}"
+        },
+        {
+          "file": "@tanstack/react-query/src/useQuery.ts",
+          "name": "useQuery",
+          "line": 291,
+          "outcome": "skipped",
+          "reason": "a declaration that reads unsettled names",
+          "before": "export function useQuery(options: UseQueryOptions, queryClient?: QueryClient) {\n  return useBaseQuery(options, QueryObserver, queryClient)\n}"
+        }
+      ]
+    }
+  ],
+  "effect": {
+    "tag": "effect@3.22.2",
+    "lifted": {
+      "source": "lifted",
+      "lifted": 2424,
+      "date": "2026-09-24T21:27:47.449Z",
+      "commit": "a4c8140",
+      "dirty": false,
+      "files": 520,
+      "tests": 6243,
+      "passed": 6233,
+      "failed": 0,
+      "skipped": 10
+    },
+    "unlifted": {
+      "source": "unlifted",
+      "lifted": 2424,
+      "date": "2026-09-24T21:32:15.714Z",
+      "commit": "a4c8140",
+      "dirty": false,
+      "files": 520,
+      "tests": 6243,
+      "passed": 6233,
+      "failed": 0,
+      "skipped": 10
+    },
+    "bench": {
+      "date": "2026-09-24T21:20:16.061Z",
+      "commit": "a4c8140",
+      "dirty": false,
+      "node": "v22.22.2",
+      "processes": 4,
+      "samples": 7,
+      "workloads": {
+        "Effect.gen, map, flatMap": {
+          "original": 83.89157599999999,
+          "lifted": 104.5052169999999,
+          "unlifted": 85.16932599999996,
+          "control": 86.1426919999999
+        },
+        "Chunk, HashMap, Option": {
+          "original": 42.745169999999916,
+          "lifted": 74.1591739999999,
+          "unlifted": 45.87023799999997,
+          "control": 45.95234400000004
+        },
+        "Schema decode": {
+          "original": 43.982322999999724,
+          "lifted": 65.71193799999992,
+          "unlifted": 44.77925200000027,
+          "control": 44.899055999999746
+        }
+      }
+    }
+  }
+}

@@ -1,6 +1,6 @@
 # eslint-plugin-hermetic
 
-**A hermetic function depends only on what it is handed: its arguments, `this`, and a small, explicitly configured *ground* of harmless globals.** The name comes from hermetic builds, which depend only on their declared inputs, and that is what makes them cacheable and runnable anywhere. A hermetic function is not a pure function. It may mutate and cause effects, but only through what it was handed. This plugin enforces the idea with one rule, `hermetic/sealed`.
+**A hermetic function depends only on what it is handed: its arguments, `this`, and a small, explicitly configured *ground* of harmless globals.** The name comes from hermetic builds, which depend only on their declared inputs, and that is what makes them cacheable and runnable anywhere. A hermetic function is not a pure function. It may mutate and cause effects, but only through what it was handed. This plugin enforces the idea with `hermetic/sealed`, and `hermetic/prefer-hermetic` finds the functions to mark, or splits them so that they can be.
 
 ```ts
 function applyDiscount(this: PricingCtx, invoice: Invoice): Invoice {
@@ -38,7 +38,12 @@ export default defineConfig(
 );
 ```
 
-The rule checks only functions marked hermetic, so enabling it everywhere is safe. It also works on plain JavaScript through ESLint's default parser.
+`hermetic/sealed` checks only functions marked hermetic, so enabling it everywhere is safe. Both rules also work on plain JavaScript through ESLint's default parser.
+
+| Rule | What it does | Fix |
+| --- | --- | --- |
+| [`hermetic/sealed`](docs/rules/sealed.md) | Reports everything a marked function reaches outside itself. In the recommended config. | |
+| [`hermetic/prefer-hermetic`](docs/rules/prefer-hermetic.md) | Reports functions that are already hermetic, and with `lift`, functions that can be split into a hermetic core and a binding. | Marks, or splits in place |
 
 ## Marking a function
 
@@ -132,7 +137,7 @@ export function ground(realm: typeof globalThis) {
 ```js
 // eslint.config.js
 hermetic.configs.recommended,
-{ rules: { "hermetic/sealed": ["error", { ground: "./hermetic.ground.ts" }] } },
+{ settings: { hermetic: { ground: "./hermetic.ground.ts" } } },
 ```
 
 The plugin loads it in three steps:
@@ -166,6 +171,13 @@ type Options = {
 };
 ```
 
+Both rules take these options, and both read them from `settings.hermetic` as well, so one setting configures both. Options given to a rule take precedence.
+
+```js
+// eslint.config.js
+{ settings: { hermetic: { ground: "./hermetic.ground.ts", aliasing: "forbid" } } },
+```
+
 - **`types`**. Type-only references are erased at runtime, so `"allow"` permits them, including `typeof x` in type positions. `"structural-only"` reports type references that resolve to a declaration outside the function, such as imports and module-level interfaces and aliases, so the function can move across files unchanged. TypeScript's lib types and other global types stay allowed.
 - **`ground`**. See [the ground](#the-ground).
 - **`aliasing`**. See [denied paths and aliasing](#denied-paths-and-aliasing).
@@ -184,6 +196,31 @@ export const applyPricing = applyDiscount.bind(pricing); // (invoice: Invoice) =
 
 See [`examples/pricing.ts`](examples/pricing.ts) for a complete example.
 
+## Making a codebase hermetic
+
+`hermetic/prefer-hermetic` finds the functions that are hermetic already and marks them. With `lift`, it also splits functions whose only outside inputs are module bindings and globals: the body moves into a hermetic core, and the original name becomes a binding that hands the core those inputs.
+
+```ts
+// before
+export const discount = (dollars: number, rate = 0.2) => toCents(dollars * (1 - rate));
+
+// after --fix
+export const discount = (dollars: number, rate = 0.2) => discountHermetic.call({ toCents }, dollars, rate);
+
+function discountHermetic(this: { toCents: typeof toCents }, dollars: number, rate = 0.2) {
+  "use hermetic";
+  return this.toCents(dollars * (1 - rate));
+}
+```
+
+The generated binding is the degenerate binding layer: it grants exactly what the function used to take from its surroundings. Callers do not change, and from there you can narrow the grants by hand. One command does the whole codebase:
+
+```sh
+npx eslint --fix --rule '{"hermetic/prefer-hermetic": ["warn", {"lift": true}]}' src/
+```
+
+The fix applies only where the split preserves behavior and types, and leaves the rest for a person. On Effect, RxJS and TanStack Query, it marked 22.8% of 5,315 candidate functions and lifted 46.1%, the fixed code type-checks with no new errors, and Effect's own 6,233 tests pass on its lifted source. The [rule's documentation](docs/rules/prefer-hermetic.md) lists what it skips, what changes (a stack frame, `toString`, a per-call cost), and how it decides.
+
 ## What hermeticity does not give you
 
 - **Purity.** A hermetic function can still do anything its arguments and `this` allow, and any of them can be a Proxy.
@@ -200,14 +237,18 @@ See [`examples/pricing.ts`](examples/pricing.ts) for a complete example.
 | M3 | Denied member paths | Done |
 | M4 | Doctest harness with the `toString` round trip | Next |
 | M5 | Recording Proxy for `this`, replaying a captured call as a test | Next |
+| | `hermetic/prefer-hermetic`: marking and lift fixes, validated on a corpus | Done |
 
 ## Development
 
 ```sh
 npm install
-npm run check   # typecheck, lint, test
-npm run build   # emit dist/
+npm run check    # typecheck, lint, test
+npm run build    # emit dist/
+npm run corpus   # census, stress and fix on pinned open-source packages
 ```
+
+`npm run corpus -- effect` also lifts Effect's own source in a checkout of its repository and runs its test suite on the result. It needs git and pnpm.
 
 Development needs Node 22.18 or later, because `eslint.config.js` loads the plugin's TypeScript source directly. The repository lints itself with the rule. The plugin's own pure helpers, such as the ground functions in [`src/ground/ground.ts`](src/ground/ground.ts), are marked `"use hermetic"`.
 

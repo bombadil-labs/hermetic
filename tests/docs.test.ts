@@ -41,3 +41,25 @@ describe("docs/rules/sealed.md", () => {
     expect(lint(correct ?? "")).toEqual([]);
   });
 });
+
+describe("docs/rules/prefer-hermetic.md", () => {
+  const preferDoc = fs.readFileSync(path.join(repoRoot, "docs/rules/prefer-hermetic.md"), "utf8");
+  const [before, after] = [...preferDoc.matchAll(/```ts\n([\s\S]*?)```/g)].map((match) => match[1] ?? "");
+
+  it("shows exactly what the fix produces", () => {
+    const result = new Linter().verifyAndFix(
+      before ?? "",
+      [
+        {
+          files: ["**/*.ts"],
+          languageOptions: { parser: tsParser as Linter.Parser },
+          plugins: { hermetic: plugin },
+          rules: { "hermetic/prefer-hermetic": ["error", { lift: true }], "hermetic/sealed": "error" },
+        },
+      ],
+      { filename: "doc.ts" },
+    );
+    expect(result.output).toBe(after);
+    expect(result.messages).toEqual([]);
+  });
+});

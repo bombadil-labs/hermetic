@@ -8,8 +8,10 @@
 //   npm run corpus -- fix     `prefer-hermetic --fix` with lift: parses, sealed, settled, no new type errors
 //   npm run corpus -- effect  lifts Effect's own source and runs its test suite (needs git and pnpm)
 //
-// Library code under-represents ambient authority (fetch, Date, process), so
-// treat the lift numbers as a floor for application code.
+// Library code is one particular shape: few globals, many small helpers, heavy
+// use of namespace imports. Application code reaches for more ambient
+// authority (fetch, Date, process) and has more classes and components, so
+// expect it to split differently.
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";

@@ -27,7 +27,7 @@ describe("the pricing example", () => {
   });
 
   it("keeps the directive in the compiled source, where runtime tools can see it", () => {
-    expect(applyDiscount.toString()).toContain('"use isolated"');
+    expect(applyDiscount.toString()).toContain('"use hermetic"');
   });
 });
 
@@ -37,8 +37,8 @@ describe("the examples", () => {
       {
         files: ["**/*.ts"],
         languageOptions: { parser: tsParser as Linter.Parser },
-        plugins: { isolated: plugin as never },
-        rules: { "isolated/closed": ["error", { ground: "examples/isolated.ground.ts", aliasing: "forbid" }] },
+        plugins: { hermetic: plugin as never },
+        rules: { "hermetic/sealed": ["error", { ground: "examples/hermetic.ground.ts", aliasing: "forbid" }] },
       },
     ];
     const eslint = new ESLint({ cwd: repoRoot, overrideConfigFile: true, overrideConfig: config });

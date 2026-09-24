@@ -1,9 +1,9 @@
 /**
- * The ground: the global names an isolated function may assume, plus member
+ * The ground: the global names a hermetic function may assume, plus member
  * paths inside those globals that stay off limits.
  */
 export interface Ground {
-  /** Global names an isolated function may read. */
+  /** Global names a hermetic function may read. */
   readonly names: ReadonlySet<string>;
   /** Denied member paths as segment lists, such as `["Math", "random"]`. Each has at least two segments. */
   readonly deny: readonly (readonly string[])[];
@@ -23,7 +23,7 @@ export interface GroundConfig {
  * path removes the name from the ground entirely.
  */
 export function createGround(allow: Iterable<string>, deny: Iterable<string> = []): Ground {
-  "use isolated";
+  "use hermetic";
   const names = new Set(allow);
   const paths: string[][] = [];
   for (const path of deny) {
@@ -39,7 +39,7 @@ export function createGround(allow: Iterable<string>, deny: Iterable<string> = [
 
 /** True when `path` is exactly one of the ground's denied paths. */
 export function isDenied(ground: Ground, path: readonly string[]): boolean {
-  "use isolated";
+  "use hermetic";
   return ground.deny.some(
     (denied) => denied.length === path.length && denied.every((segment, i) => segment === path[i]),
   );
@@ -47,7 +47,7 @@ export function isDenied(ground: Ground, path: readonly string[]): boolean {
 
 /** True when some denied path lies strictly beneath `path`, such as `Math` for `Math.random`. */
 export function hasDeniedMembers(ground: Ground, path: readonly string[]): boolean {
-  "use isolated";
+  "use hermetic";
   return ground.deny.some(
     (denied) => denied.length > path.length && path.every((segment, i) => segment === denied[i]),
   );

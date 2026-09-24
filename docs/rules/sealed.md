@@ -1,12 +1,12 @@
-# isolated/closed
+# hermetic/sealed
 
-Require isolated functions to touch the world only through their arguments, `this`, and the ground.
+Require hermetic functions to touch the world only through their arguments, `this`, and the ground.
 
-An isolated function is not a pure function. It may mutate and cause effects, but only through what it is handed. This rule checks that a function marked isolated has no free variables except names in the ground, and none of the syntactic escapes listed below.
+A hermetic function depends only on what it is handed: its arguments, `this`, and the ground. It is not a pure function: it may mutate and cause effects, but only through what it was handed. This rule checks that a function marked hermetic has no free variables except names in the ground, and none of the syntactic escapes listed below.
 
 ## Marking
 
-A function is isolated when its body starts with a `"use isolated"` directive, or when a JSDoc block before it (or before the declaration that introduces it) has an `@isolated` tag at the start of a line. Unmarked functions are not checked.
+A function is hermetic when its body starts with a `"use hermetic"` directive, or when a JSDoc block before it (or before the declaration that introduces it) has an `@hermetic` tag at the start of a line. Unmarked functions are not checked.
 
 ## Rule details
 
@@ -15,45 +15,45 @@ Examples of **incorrect** code:
 ```ts
 const RATE = 0.1;
 function discount(total: number) {
-  "use isolated";
+  "use hermetic";
   return total * (1 - RATE); // 'RATE' is a free variable
 }
 
 import { clamp } from "./clamp";
 function price(total: number) {
-  "use isolated";
-  return clamp(total); // imports are free variables, even isolated ones
+  "use hermetic";
+  return clamp(total); // imports are free variables, even hermetic ones
 }
 
 function roll() {
-  "use isolated";
+  "use hermetic";
   return Math.random(); // denied by the default ground
 }
 
 function now() {
-  "use isolated";
+  "use hermetic";
   return Date.now(); // Date is not in the default ground
 }
 
 const rate = () => {
-  "use isolated";
+  "use hermetic";
   return this.rate; // arrow `this` is lexical
 };
 
 class Pricing extends Base {
   apply() {
-    "use isolated";
+    "use hermetic";
     return super.apply(); // reaches the enclosing home object
   }
 }
 
 function url() {
-  "use isolated";
+  "use hermetic";
   return import.meta.url; // reaches the enclosing module
 }
 
 function Badge() {
-  "use isolated";
+  "use hermetic";
   return <span />; // the JSX factory is a free variable
 }
 ```
@@ -62,29 +62,29 @@ Examples of **correct** code:
 
 ```ts
 function discount(this: { rate: number }, total: number) {
-  "use isolated";
+  "use hermetic";
   return total * (1 - this.rate);
 }
 
 function scale(xs: number[], k: number) {
-  "use isolated";
+  "use hermetic";
   const round = (x: number) => Math.round(x * k); // inner closures may use locals
   return xs.map(round);
 }
 
 function apply(cb: (n: number) => number) {
-  "use isolated";
+  "use hermetic";
   return cb(1); // calling a callback you were handed
 }
 
 function fact(n: number): number {
-  "use isolated";
+  "use hermetic";
   return n <= 1 ? 1 : n * fact(n - 1); // a declaration may call itself by name
 }
 
 import type { Invoice } from "./invoice";
 function total(invoice: Invoice) {
-  "use isolated";
+  "use hermetic";
   return invoice.total; // types are erased (with types: "allow")
 }
 ```
@@ -99,12 +99,12 @@ function total(invoice: Invoice) {
 | `deniedPath` | A static member chain or destructuring pattern reaches a denied path, such as `Math.random`. |
 | `aliasedGround` | With `aliasing: "forbid"`: a ground object that has denied members is used in a way that could hand it elsewhere. |
 | `typeReference` | With `types: "structural-only"`: a type reference resolves to a declaration outside the function. |
-| `lexicalThis`, `lexicalNewTarget` | `this` or `new.target` inside an isolated arrow function, or inside an arrow nested in one, before any function that rebinds it. |
-| `superReference` | `super` whose home object lies outside the isolated function. |
-| `importMeta`, `dynamicImport` | `import.meta` or `import()` anywhere inside the isolated function. |
-| `jsx` | The root of a JSX tree inside the isolated function. |
+| `lexicalThis`, `lexicalNewTarget` | `this` or `new.target` inside a hermetic arrow function, or inside an arrow nested in one, before any function that rebinds it. |
+| `superReference` | `super` whose home object lies outside the hermetic function. |
+| `importMeta`, `dynamicImport` | `import.meta` or `import()` anywhere inside the hermetic function. |
+| `jsx` | The root of a JSX tree inside the hermetic function. |
 
-When isolated functions nest, an escape is reported once, for the innermost one it escapes.
+When hermetic functions nest, an escape is reported once, for the innermost one it escapes.
 
 ## Options
 
@@ -123,7 +123,7 @@ type Options = {
 
 ### `ground`
 
-A path to a ground bootstrap module, absolute or relative to ESLint's working directory, or a `file:` URL. Without it, the default ground applies. The bootstrap is the export named `ground`, or else the default export. It must itself be marked isolated. It is linted with this rule, on the default ground, before it runs, and it may only use TypeScript syntax that erases cleanly. See the [README](../../README.md#the-ground).
+A path to a ground bootstrap module, absolute or relative to ESLint's working directory, or a `file:` URL. Without it, the default ground applies. The bootstrap is the export named `ground`, or else the default export. It must itself be marked hermetic. It is linted with this rule, on the default ground, before it runs, and it may only use TypeScript syntax that erases cleanly. See the [README](../../README.md#the-ground).
 
 ### `aliasing`
 
@@ -132,4 +132,4 @@ A path to a ground bootstrap module, absolute or relative to ESLint's working di
 
 ## When not to use it
 
-The rule has no effect on code that does not mark functions isolated. Isolation suits business logic. It does not suit code whose job is to reach ambient authority, such as a binding layer or an entry point.
+The rule has no effect on code that does not mark functions hermetic. Hermetic functions suit business logic. It does not suit code whose job is to reach ambient authority, such as a binding layer or an entry point.

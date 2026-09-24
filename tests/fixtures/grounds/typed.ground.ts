@@ -5,7 +5,7 @@ interface Allow {
 type Deny = readonly string[];
 
 export function ground<R extends typeof globalThis>(this: void, realm: R, extra?: Deny): { allow: Allow; deny: Deny } {
-  "use isolated";
+  "use hermetic";
   type Local = { readonly math: R["Math"] };
   let deny!: string[];
   deny = [...(extra ?? []), "Math.random"] satisfies Deny as string[];

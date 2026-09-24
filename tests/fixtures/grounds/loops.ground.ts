@@ -1,5 +1,5 @@
 export function ground() {
-  "use isolated";
+  "use hermetic";
   for (;;) {
     // Never returns.
   }

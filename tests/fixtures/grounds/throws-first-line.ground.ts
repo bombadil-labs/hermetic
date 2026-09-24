@@ -1,1 +1,1 @@
-export function ground(): never { "use isolated"; throw new Error("early"); }
+export function ground(): never { "use hermetic"; throw new Error("early"); }

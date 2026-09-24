@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import plugin from "../src/index.ts";
 import { repoRoot } from "./helpers.ts";
 
-const doc = fs.readFileSync(path.join(repoRoot, "docs/rules/closed.md"), "utf8");
+const doc = fs.readFileSync(path.join(repoRoot, "docs/rules/sealed.md"), "utf8");
 const [incorrect, correct] = [...doc.matchAll(/```ts\n([\s\S]*?)```/g)].map((match) => match[1] ?? "");
 
 const lint = (code: string) =>
@@ -16,14 +16,14 @@ const lint = (code: string) =>
       {
         files: ["**/*.tsx"],
         languageOptions: { parser: tsParser as Linter.Parser },
-        plugins: { isolated: plugin },
-        rules: { "isolated/closed": "error" },
+        plugins: { hermetic: plugin },
+        rules: { "hermetic/sealed": "error" },
       },
     ],
     { filename: "doc.tsx" },
   );
 
-describe("docs/rules/closed.md", () => {
+describe("docs/rules/sealed.md", () => {
   it("reports exactly one problem per incorrect example", () => {
     expect(lint(incorrect ?? "").map((message) => message.messageId ?? message.message)).toEqual([
       "freeVariable",

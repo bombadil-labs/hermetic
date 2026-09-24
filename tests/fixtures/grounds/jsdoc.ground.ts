@@ -1,2 +1,2 @@
-/** @isolated */
+/** @hermetic */
 export const ground = (realm: typeof globalThis) => ({ allow: { Map: realm.Map } });

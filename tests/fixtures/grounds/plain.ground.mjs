@@ -1,4 +1,4 @@
 export function ground(realm) {
-  "use isolated";
+  "use hermetic";
   return { allow: { Math: realm.Math, Set: realm.Set }, deny: ["Math.random"] };
 }

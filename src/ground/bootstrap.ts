@@ -4,7 +4,7 @@ import path from "node:path";
 import vm from "node:vm";
 import { AST_NODE_TYPES, type TSESLint, type TSESTree } from "@typescript-eslint/utils";
 import type { Linter as ESLintLinter } from "eslint";
-import { type FunctionNode, isFunctionNode, isMarkedIsolated } from "../marking.ts";
+import { type FunctionNode, isFunctionNode, isMarkedHermetic } from "../marking.ts";
 import { eraseTypes, NonErasableSyntaxError } from "./erase.ts";
 import { createGround, type Ground } from "./ground.ts";
 
@@ -27,11 +27,11 @@ interface CacheEntry {
 const cache = new Map<string, CacheEntry>();
 
 /**
- * Loads the ground from a bootstrap module. The bootstrap is an isolated
+ * Loads the ground from a bootstrap module. The bootstrap is a hermetic
  * function that receives a realm and returns `{ allow, deny }`.
  *
  * 1. Lint the bootstrap with the rule itself, on the default ground, and
- *    refuse to go on unless it is marked isolated and passes.
+ *    refuse to go on unless it is marked hermetic and passes.
  * 2. Erase its TypeScript syntax and evaluate its source text alone in a
  *    fresh `node:vm` context. Passing the lint is what makes this safe: the
  *    function touches nothing but the realm it is handed, so it runs the same
@@ -65,10 +65,10 @@ function evaluateBootstrap(file: string, source: string, rule: TSESLint.AnyRuleM
   const config = {
     files: ["**"],
     languageOptions: { parser, sourceType: "module", ecmaVersion: "latest" },
-    // Suppression comments must not let a bootstrap that is not isolated run.
+    // Suppression comments must not let a bootstrap that is not hermetic run.
     linterOptions: { noInlineConfig: true, reportUnusedDisableDirectives: "off" },
-    plugins: { isolated: { rules: { closed: rule } } },
-    rules: { "isolated/closed": "error" },
+    plugins: { hermetic: { rules: { sealed: rule } } },
+    rules: { "hermetic/sealed": "error" },
   } as unknown as ESLintLinter.Config;
   const messages = linter.verify(source, [config], { filename: file });
 
@@ -87,21 +87,21 @@ function evaluateBootstrap(file: string, source: string, rule: TSESLint.AnyRuleM
         "that receives the realm and returns { allow, deny }.",
     );
   }
-  if (!isMarkedIsolated(bootstrap, sourceCode)) {
+  if (!isMarkedHermetic(bootstrap, sourceCode)) {
     throw new GroundBootstrapError(
-      `The ground bootstrap in ${file} must be marked isolated, with a "use isolated" directive or an @isolated ` +
+      `The ground bootstrap in ${file} must be marked hermetic, with a "use hermetic" directive or an @hermetic ` +
         "JSDoc tag, so that it can be linted before it runs.",
     );
   }
   const [start, end] = bootstrap.range;
   const problems = messages.filter((message) => {
-    if (message.ruleId !== "isolated/closed") return false;
+    if (message.ruleId !== "hermetic/sealed") return false;
     const offset = sourceCode.getIndexFromLoc({ line: message.line, column: message.column - 1 });
     return offset >= start && offset < end;
   });
   if (problems.length > 0) {
     const list = problems.map((problem) => `  ${problem.line}:${problem.column}  ${problem.message}`).join("\n");
-    throw new GroundBootstrapError(`The ground bootstrap in ${file} is not isolated, so it will not be run:\n${list}`);
+    throw new GroundBootstrapError(`The ground bootstrap in ${file} is not hermetic, so it will not be run:\n${list}`);
   }
 
   let code: string;

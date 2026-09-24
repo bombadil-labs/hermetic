@@ -1,4 +1,4 @@
 export function ground() {
-  "use isolated";
+  "use hermetic";
   throw new Error("no ground today");
 }

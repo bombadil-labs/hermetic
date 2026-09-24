@@ -1,4 +1,4 @@
 export function ground(realm: typeof globalThis) {
-  "use isolated";
+  "use hermetic";
   return { allow: { Math: realm.Math }
 }

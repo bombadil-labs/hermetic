@@ -3,13 +3,13 @@ import { fileURLToPath } from "node:url";
 import { AST_NODE_TYPES, ESLintUtils, type TSESLint, type TSESTree } from "@typescript-eslint/utils";
 import { loadGround } from "../ground/bootstrap.ts";
 import { DEFAULT_GROUND, type Ground, hasDeniedMembers, isDenied } from "../ground/ground.ts";
-import { type FunctionNode, functionName, isMarkedIsolated, staticKey } from "../marking.ts";
+import { type FunctionNode, functionName, isMarkedHermetic, staticKey } from "../marking.ts";
 
 type Reference = TSESLint.Scope.Reference;
 type Variable = TSESLint.Scope.Variable;
 type Definition = TSESLint.Scope.Definition;
 
-export interface ClosedOptions {
+export interface SealedOptions {
   /**
    * `"allow"` (default) permits type-only references that escape the
    * function, since types are erased. `"structural-only"` reports escaping
@@ -73,16 +73,16 @@ const createRule = ESLintUtils.RuleCreator(
 );
 
 // Annotated because the rule lints ground bootstraps with itself, so it refers to its own value.
-export const closed: TSESLint.RuleModule<MessageIds, [ClosedOptions]> & { name: string } = createRule<
-  [ClosedOptions],
+export const sealed: TSESLint.RuleModule<MessageIds, [SealedOptions]> & { name: string } = createRule<
+  [SealedOptions],
   MessageIds
 >({
-  name: "closed",
+  name: "sealed",
   meta: {
     type: "problem",
     docs: {
       description:
-        "Require isolated functions to touch the world only through their arguments, `this`, and the ground",
+        "Require hermetic functions to touch the world only through their arguments, `this`, and the ground",
     },
     schema: [
       {
@@ -91,7 +91,7 @@ export const closed: TSESLint.RuleModule<MessageIds, [ClosedOptions]> & { name: 
           types: {
             type: "string",
             enum: ["allow", "structural-only"],
-            description: "How to treat type-only references that escape an isolated function.",
+            description: "How to treat type-only references that escape a hermetic function.",
           },
           ground: {
             type: "string",
@@ -109,34 +109,34 @@ export const closed: TSESLint.RuleModule<MessageIds, [ClosedOptions]> & { name: 
     defaultOptions: [{ types: "allow", aliasing: "best-effort" }],
     messages: {
       freeVariable:
-        "'{{name}}' is a free variable in isolated function '{{fn}}'. Pass it through 'this' or an argument.",
+        "'{{name}}' is a free variable in hermetic function '{{fn}}'. Pass it through 'this' or an argument.",
       shadowedGround:
-        "'{{name}}' refers to a binding declared outside isolated function '{{fn}}', not the ground global. Pass it through 'this' or an argument.",
+        "'{{name}}' refers to a binding declared outside hermetic function '{{fn}}', not the ground global. Pass it through 'this' or an argument.",
       groundWrite:
-        "Isolated function '{{fn}}' assigns to the ground global '{{name}}'. The ground can be read, not reassigned.",
+        "Hermetic function '{{fn}}' assigns to the ground global '{{name}}'. The ground can be read, not reassigned.",
       deniedPath:
-        "'{{path}}' is denied by the ground in isolated function '{{fn}}'. Pass it through 'this' or an argument.",
+        "'{{path}}' is denied by the ground in hermetic function '{{fn}}'. Pass it through 'this' or an argument.",
       aliasedGround:
-        "'{{path}}' has denied members, and isolated function '{{fn}}' hands it on here, where they could be reached. Pass what you need through 'this' or an argument.",
+        "'{{path}}' has denied members, and hermetic function '{{fn}}' hands it on here, where they could be reached. Pass what you need through 'this' or an argument.",
       typeReference:
-        "Type reference '{{name}}' escapes isolated function '{{fn}}'. With types: \"structural-only\", write the type structurally.",
+        "Type reference '{{name}}' escapes hermetic function '{{fn}}'. With types: \"structural-only\", write the type structurally.",
       lexicalThis:
-        "'this' in isolated arrow function '{{fn}}' is lexical, so it reaches the enclosing scope. Use a non-arrow function to receive 'this'.",
+        "'this' in hermetic arrow function '{{fn}}' is lexical, so it reaches the enclosing scope. Use a non-arrow function to receive 'this'.",
       lexicalNewTarget:
-        "'new.target' in isolated arrow function '{{fn}}' is lexical, so it reaches the enclosing scope. Use a non-arrow function.",
+        "'new.target' in hermetic arrow function '{{fn}}' is lexical, so it reaches the enclosing scope. Use a non-arrow function.",
       superReference:
-        "'super' in isolated function '{{fn}}' reaches the enclosing home object. Pass the behavior through 'this' or an argument.",
+        "'super' in hermetic function '{{fn}}' reaches the enclosing home object. Pass the behavior through 'this' or an argument.",
       importMeta:
-        "'import.meta' in isolated function '{{fn}}' reaches the enclosing module. Pass the value through 'this' or an argument.",
+        "'import.meta' in hermetic function '{{fn}}' reaches the enclosing module. Pass the value through 'this' or an argument.",
       dynamicImport:
-        "Dynamic import() in isolated function '{{fn}}' loads code through ambient authority. Pass the module through 'this' or an argument.",
-      jsx: "JSX in isolated function '{{fn}}' compiles to a call to the JSX factory, which is a free variable. Pass an element factory through 'this' or an argument.",
+        "Dynamic import() in hermetic function '{{fn}}' loads code through ambient authority. Pass the module through 'this' or an argument.",
+      jsx: "JSX in hermetic function '{{fn}}' compiles to a call to the JSX factory, which is a free variable. Pass an element factory through 'this' or an argument.",
     },
   },
   create(context, [options]) {
     const sourceCode = context.sourceCode;
     const ground: Ground =
-      options.ground === undefined ? DEFAULT_GROUND : loadGround(resolveGroundPath(options.ground, context.cwd), closed);
+      options.ground === undefined ? DEFAULT_GROUND : loadGround(resolveGroundPath(options.ground, context.cwd), sealed);
     const structuralOnly = options.types === "structural-only";
     const forbidAliasing = options.aliasing === "forbid";
 
@@ -258,7 +258,7 @@ export const closed: TSESLint.RuleModule<MessageIds, [ClosedOptions]> & { name: 
 
     return {
       ":function"(node: FunctionNode) {
-        if (!isMarkedIsolated(node, sourceCode)) return;
+        if (!isMarkedHermetic(node, sourceCode)) return;
         marked.set(node, functionName(node));
         open++;
       },

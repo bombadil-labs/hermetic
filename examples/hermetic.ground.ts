@@ -1,5 +1,5 @@
 /**
- * The ground bootstrap: the one place that decides which globals isolated
+ * The ground bootstrap: the one place that decides which globals hermetic
  * functions may assume. This file spells out the default ground, so it is a
  * starting point to copy and edit.
  *
@@ -13,7 +13,7 @@
  * at runtime.
  */
 export function ground(realm: typeof globalThis) {
-  "use isolated";
+  "use hermetic";
   return {
     allow: {
       // Value globals

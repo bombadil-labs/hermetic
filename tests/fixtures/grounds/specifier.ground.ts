@@ -1,5 +1,5 @@
 const makeGround = (realm: typeof globalThis) => {
-  "use isolated";
+  "use hermetic";
   return { allow: { Array: realm.Array }, deny: [] };
 };
 

@@ -4,10 +4,10 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { GroundBootstrapError, loadGround } from "../../src/ground/bootstrap.ts";
 import { DEFAULT_GROUND, type Ground } from "../../src/ground/ground.ts";
-import { closed } from "../../src/rules/closed.ts";
+import { sealed } from "../../src/rules/sealed.ts";
 import { fixture, repoRoot } from "../helpers.ts";
 
-const load = (file: string): Ground => loadGround(file, closed);
+const load = (file: string): Ground => loadGround(file, sealed);
 const summary = (ground: Ground) => ({
   names: [...ground.names].sort(),
   deny: ground.deny.map((segments) => segments.join(".")).sort(),
@@ -29,7 +29,7 @@ describe("loading a ground bootstrap", () => {
     expect(summary(load(fixture("specifier.ground.ts")))).toEqual({ names: ["Array"], deny: [] });
   });
 
-  it("accepts an @isolated JSDoc tag on an expression-bodied arrow", () => {
+  it("accepts an @hermetic JSDoc tag on an expression-bodied arrow", () => {
     expect(summary(load(fixture("jsdoc.ground.ts")))).toEqual({ names: ["Map"], deny: [] });
   });
 
@@ -46,7 +46,7 @@ describe("loading a ground bootstrap", () => {
   });
 
   it("matches the default ground when the default is spelled as a bootstrap", () => {
-    expect(summary(load(path.join(repoRoot, "examples/isolated.ground.ts")))).toEqual(summary(DEFAULT_GROUND));
+    expect(summary(load(path.join(repoRoot, "examples/hermetic.ground.ts")))).toEqual(summary(DEFAULT_GROUND));
   });
 });
 
@@ -60,10 +60,10 @@ describe("refusing a ground bootstrap", () => {
   it("when the file is missing", () => refuses("missing.ground.ts", /Cannot read the ground bootstrap/));
   it("when the file does not parse", () => refuses("syntax-error.ground.ts", /Cannot parse the ground bootstrap/));
   it("when there is no bootstrap export", () => refuses("no-bootstrap.ground.ts", /No ground bootstrap found/));
-  it("when the bootstrap is not marked isolated", () => refuses("unmarked.ground.ts", /must be marked isolated/));
+  it("when the bootstrap is not marked hermetic", () => refuses("unmarked.ground.ts", /must be marked hermetic/));
 
-  it("when the bootstrap is not isolated, listing the problems", () =>
-    refuses("free-variable.ground.ts", /is not isolated, so it will not be run:\n.*'extra' is a free variable/));
+  it("when the bootstrap is not hermetic, listing the problems", () =>
+    refuses("free-variable.ground.ts", /is not hermetic, so it will not be run:\n.*'extra' is a free variable/));
 
   it("even when the problem is suppressed with an eslint-disable comment", () =>
     refuses("suppressed.ground.ts", /'extra' is a free variable/));
@@ -87,11 +87,11 @@ describe("refusing a ground bootstrap", () => {
 });
 
 describe("caching", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "isolated-ground-"));
-  const file = path.join(dir, "isolated.ground.ts");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hermetic-ground-"));
+  const file = path.join(dir, "hermetic.ground.ts");
   const write = (names: string[], mtimeSeconds: number) => {
     const allow = names.map((name) => `${name}: realm.${name}`).join(", ");
-    fs.writeFileSync(file, `export function ground(realm: typeof globalThis) {\n  "use isolated";\n  return { allow: { ${allow} } };\n}\n`);
+    fs.writeFileSync(file, `export function ground(realm: typeof globalThis) {\n  "use hermetic";\n  return { allow: { ${allow} } };\n}\n`);
     fs.utimesSync(file, mtimeSeconds, mtimeSeconds);
   };
   afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));

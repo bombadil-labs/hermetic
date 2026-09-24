@@ -1,5 +1,5 @@
 /**
- * The pricing example from the spec: business logic in isolated functions,
+ * The pricing example from the spec: business logic in hermetic functions,
  * authority granted in a thin binding layer.
  */
 
@@ -15,24 +15,24 @@ export interface PricingCtx {
 }
 
 export function applyDiscount(this: PricingCtx, invoice: Invoice): Invoice {
-  "use isolated";
+  "use hermetic";
   return { ...invoice, total: this.clamp(invoice.total * (1 - this.rate)) };
 }
 
 /** Rounds to whole cents. */
 export function clampToCents(n: number): number {
-  "use isolated";
+  "use hermetic";
   return Math.round(n * 100) / 100;
 }
 
-/** Totals invoices. Isolation is not transitive, so pricing arrives through `this`. */
+/** Totals invoices. Hermeticity is not transitive, so pricing arrives through `this`. */
 export function checkout(this: { price: (invoice: Invoice) => Invoice }, invoices: readonly Invoice[]): number {
-  "use isolated";
+  "use hermetic";
   return invoices.map((invoice) => this.price(invoice).total).reduce((sum, total) => sum + total, 0);
 }
 
 // Binding layer: ordinary code, and the only place authority is granted.
-// It builds `this` objects and binds them, composing isolated functions by
+// It builds `this` objects and binds them, composing hermetic functions by
 // placing bound ones into other contexts.
 
 export function bindPricing(config: { readonly discountRate: number }) {

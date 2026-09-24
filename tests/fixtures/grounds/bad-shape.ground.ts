@@ -1,4 +1,4 @@
 export function ground() {
-  "use isolated";
+  "use hermetic";
   return { allow: ["Math"].length > 0 ? null : {} };
 }

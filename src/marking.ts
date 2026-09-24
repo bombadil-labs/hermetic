@@ -13,41 +13,41 @@ export function isFunctionNode(node: TSESTree.Node | null | undefined): node is 
   );
 }
 
-/** True when the function carries a `"use isolated"` directive or an `@isolated` JSDoc tag. */
-export function isMarkedIsolated(node: FunctionNode, sourceCode: Readonly<TSESLint.SourceCode>): boolean {
-  return hasIsolatedDirective(node) || hasIsolatedTag(node, sourceCode);
+/** True when the function carries a `"use hermetic"` directive or an `@hermetic` JSDoc tag. */
+export function isMarkedHermetic(node: FunctionNode, sourceCode: Readonly<TSESLint.SourceCode>): boolean {
+  return hasHermeticDirective(node) || hasHermeticTag(node, sourceCode);
 }
 
-/** True when `"use isolated"` appears in the function body's directive prologue. */
-export function hasIsolatedDirective(node: FunctionNode): boolean {
+/** True when `"use hermetic"` appears in the function body's directive prologue. */
+export function hasHermeticDirective(node: FunctionNode): boolean {
   if (node.body.type !== AST_NODE_TYPES.BlockStatement) return false;
   for (const statement of node.body.body) {
     if (statement.type !== AST_NODE_TYPES.ExpressionStatement || statement.directive === undefined) return false;
-    if (statement.directive === "use isolated") return true;
+    if (statement.directive === "use hermetic") return true;
   }
   return false;
 }
 
 /**
  * True when a JSDoc block directly before the function, or before the
- * declaration that introduces it, has an `@isolated` tag.
+ * declaration that introduces it, has an `@hermetic` tag.
  */
-export function hasIsolatedTag(node: FunctionNode, sourceCode: Readonly<TSESLint.SourceCode>): boolean {
+export function hasHermeticTag(node: FunctionNode, sourceCode: Readonly<TSESLint.SourceCode>): boolean {
   return annotationTargets(node).some((target) =>
     sourceCode
       .getCommentsBefore(target)
-      .some((comment) => comment.type === AST_TOKEN_TYPES.Block && isIsolatedJSDoc(comment.value)),
+      .some((comment) => comment.type === AST_TOKEN_TYPES.Block && isHermeticJSDoc(comment.value)),
   );
 }
 
 /**
- * True for the body of a `/** ... *\/` comment with an `@isolated` block tag.
+ * True for the body of a `/** ... *\/` comment with an `@hermetic` block tag.
  * Like TypeScript, only a tag at the start of a line counts, so prose that
  * mentions the tag mid-sentence does not mark anything.
  */
-export function isIsolatedJSDoc(commentValue: string): boolean {
-  "use isolated";
-  return commentValue.startsWith("*") && /^[\s*]*@isolated(?=\s|$)/m.test(commentValue);
+export function isHermeticJSDoc(commentValue: string): boolean {
+  "use hermetic";
+  return commentValue.startsWith("*") && /^[\s*]*@hermetic(?=\s|$)/m.test(commentValue);
 }
 
 /** The nodes a JSDoc block may sit in front of to annotate `node`. */

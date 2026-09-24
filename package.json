@@ -28,7 +28,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "check": "npm run typecheck && npm run lint && npm run test",
-    "prepublishOnly": "npm run check && npm run build"
+    "prepublishOnly": "npm run check && npm run build",
+    "corpus": "node scripts/corpus.mjs"
   },
   "keywords": [
     "eslint",

@@ -1,6 +1,5 @@
 import { RuleTester } from "@typescript-eslint/rule-tester";
 import { preferHermetic } from "../../src/rules/prefer-hermetic.ts";
-import { fixture } from "../helpers.ts";
 
 const ruleTester = new RuleTester();
 const already = (fn: string) => ({ messageId: "alreadyHermetic" as const, data: { fn } });
@@ -14,7 +13,13 @@ ruleTester.run("prefer-hermetic: marking", preferHermetic, {
     { name: "a nested function", code: `const R = 1; function outer() { function inner() { return 1; } return inner() + R; }` },
     { name: "a callback", code: `run(() => 1);` },
     { name: "an IIFE", code: `(function () { return 1; })();` },
-    { name: "outside the default ground", code: `function f() { return Date.now(); }` },
+    { name: "reads a global", code: `function f() { return Date.now(); }` },
+    { name: "reads a built-in every realm has", code: `function f(a: number) { return Math.max(a, 1); }` },
+    { name: "a class method is never marked", code: `class Calc { twice(a: number) { return a * 2; } }` },
+    { name: "a method using its own this", code: `class A { f() { return this.x; } }` },
+    { name: "an object method", code: `const calc = { twice(a: number) { return a * 2; } };` },
+    { name: "a getter", code: `class C { get one() { return 1; } }` },
+    { name: "a class field arrow", code: `class C { twice = (a: number) => a * 2; }` },
   ],
   invalid: [
     {
@@ -96,18 +101,6 @@ ruleTester.run("prefer-hermetic: marking", preferHermetic, {
       errors: [already("inc")],
     },
     {
-      name: "a class method",
-      code: `class Calc {\n  twice(a: number) {\n    return a * 2;\n  }\n}`,
-      output: `class Calc {\n  twice(a: number) {\n    "use hermetic";\n    return a * 2;\n  }\n}`,
-      errors: [already("twice")],
-    },
-    {
-      name: "a method's own this is its declared environment",
-      code: `class A { f() { return this.x; } }`,
-      output: `class A { f() { "use hermetic"; return this.x; } }`,
-      errors: [already("f")],
-    },
-    {
       name: "several declarators are tagged one by one",
       code: `const a = () => 1, b = () => 2;`,
       output: `const a = /** @hermetic */ () => 1, b = /** @hermetic */ () => 2;`,
@@ -120,10 +113,9 @@ ruleTester.run("prefer-hermetic: marking", preferHermetic, {
       errors: [already("default")],
     },
     {
-      name: "the configured ground decides",
-      code: `function f(t: number) { return new Date(t); }`,
-      output: `function f(t: number) { "use hermetic"; return new Date(t); }`,
-      settings: { hermetic: { ground: fixture("clock.ground.ts") } },
+      name: "undefined, NaN and Infinity don't stop it",
+      code: `function f(a: number) { return a === undefined ? NaN : Infinity; }`,
+      output: `function f(a: number) { "use hermetic"; return a === undefined ? NaN : Infinity; }`,
       errors: [already("f")],
     },
   ],

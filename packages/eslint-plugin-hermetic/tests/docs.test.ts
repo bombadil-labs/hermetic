@@ -28,10 +28,10 @@ describe("docs/rules/sealed.md", () => {
     expect(lint(incorrect ?? "").map((message) => message.messageId ?? message.message)).toEqual([
       "freeVariable",
       "freeVariable",
-      "deniedPath",
+      "freeVariable",
       "freeVariable",
       "lexicalThis",
-      "superReference",
+      "method",
       "importMeta",
       "jsx",
     ]);

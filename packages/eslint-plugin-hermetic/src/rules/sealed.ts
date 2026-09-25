@@ -1,6 +1,6 @@
 import { ESLintUtils, type TSESLint, type TSESTree } from "@typescript-eslint/utils";
 import { analyze, createEnvironment, type HermeticSettings, type MessageIds, SETTINGS_SCHEMA } from "../analysis.ts";
-import { type FunctionNode, functionName, isMarkedHermetic } from "../marking.ts";
+import { type FunctionNode, functionName, isMarkedHermetic, isMethod } from "../marking.ts";
 
 export type { MessageIds } from "../analysis.ts";
 
@@ -12,12 +12,6 @@ export type { MessageIds } from "../analysis.ts";
  *   function, since types are erased. `"structural-only"` reports escaping
  *   references to declared types, so the function can move to another file
  *   unchanged. Lib and other global types stay allowed.
- * - `ground`: path to a ground bootstrap module, absolute or relative to
- *   ESLint's working directory. Without it, the default ground applies.
- * - `aliasing`: `"best-effort"` (default) reports denied member paths where
- *   they are statically visible. `"forbid"` also reports any use of a ground
- *   object with denied members that could hand it elsewhere, such as
- *   `const m = Math` or `f(Math)`.
  */
 export type SealedOptions = HermeticSettings;
 
@@ -25,7 +19,6 @@ export const createRule = ESLintUtils.RuleCreator(
   (name) => `https://github.com/bombadil-labs/hermetic/blob/main/docs/rules/${name}.md`,
 );
 
-// Annotated because the rule lints ground bootstraps with itself, so it refers to its own value.
 export const sealed: TSESLint.RuleModule<MessageIds, [SealedOptions]> & { name: string } = createRule<
   [SealedOptions],
   MessageIds
@@ -34,22 +27,15 @@ export const sealed: TSESLint.RuleModule<MessageIds, [SealedOptions]> & { name: 
   meta: {
     type: "problem",
     docs: {
-      description:
-        "Require hermetic functions to read nothing but their inputs and the allowed globals",
+      description: "Require hermetic functions to read nothing but their inputs",
     },
     schema: [{ type: "object", properties: SETTINGS_SCHEMA, additionalProperties: false }],
     defaultOptions: [{}],
     messages: {
       freeVariable:
         "'{{name}}' is a free variable in hermetic function '{{fn}}'. Pass it through 'this' or an argument.",
-      shadowedGround:
-        "'{{name}}' in hermetic function '{{fn}}' refers to a variable declared outside it, not the allowed global. Pass it through 'this' or an argument.",
-      groundWrite:
-        "Hermetic function '{{fn}}' assigns to the allowed global '{{name}}'. Allowed globals can be read, not reassigned.",
-      deniedPath:
-        "'{{path}}' is not allowed in hermetic function '{{fn}}'. Pass it through 'this' or an argument.",
-      aliasedGround:
-        "'{{path}}' has members that are not allowed, and hermetic function '{{fn}}' passes it on here, where they could be used. Pass what you need through 'this' or an argument.",
+      method:
+        "'{{fn}}' is a method, and methods can't be hermetic yet: a method's 'this' is its object, not its inputs. Make it a function, and pass the object in.",
       typeReference:
         "Type reference '{{name}}' in hermetic function '{{fn}}' refers to a declaration outside it. With types: \"structural-only\", write the type inline.",
       lexicalThis:
@@ -66,7 +52,7 @@ export const sealed: TSESLint.RuleModule<MessageIds, [SealedOptions]> & { name: 
     },
   },
   create(context, [options]) {
-    const env = createEnvironment(context, options, sealed);
+    const env = createEnvironment(context, options);
     const marked = new Map<TSESTree.Node, string>();
     /** Nested hermetic functions share escapes; each node is reported once, for the innermost. */
     const reported = new Set<TSESTree.Node>();
@@ -79,6 +65,10 @@ export const sealed: TSESLint.RuleModule<MessageIds, [SealedOptions]> & { name: 
       ":function:exit"(node: FunctionNode) {
         const name = marked.get(node);
         if (name === undefined) return;
+        if (isMethod(node)) {
+          context.report({ node: node.parent, messageId: "method", data: { fn: name } });
+          return;
+        }
         for (const { node: target, messageId, data } of analyze(node, name, env)) {
           if (reported.has(target)) continue;
           reported.add(target);

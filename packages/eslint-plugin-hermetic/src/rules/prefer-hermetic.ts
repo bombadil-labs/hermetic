@@ -1,8 +1,8 @@
 import { AST_NODE_TYPES, AST_TOKEN_TYPES, type TSESLint, type TSESTree } from "@typescript-eslint/utils";
 import { analyze, createEnvironment, type HermeticSettings, SETTINGS_SCHEMA } from "../analysis.ts";
 import { isBinding, liftFix, planLift } from "../lift.ts";
-import { directiveInsertion, type FunctionNode, functionName, isFunctionNode, isMarkedHermetic } from "../marking.ts";
-import { createRule, sealed } from "./sealed.ts";
+import { directiveInsertion, type FunctionNode, functionName, isFunctionNode, isMarkedHermetic, isMethod } from "../marking.ts";
+import { createRule } from "./sealed.ts";
 
 export interface PreferHermeticOptions extends HermeticSettings {
   /**
@@ -41,7 +41,7 @@ export const preferHermetic = createRule<[PreferHermeticOptions], MessageIds>({
     },
   },
   create(context, [options]) {
-    const env = createEnvironment(context, options, sealed);
+    const env = createEnvironment(context, options);
     const sourceCode = context.sourceCode;
     const typescript = /\.[cm]?tsx?$/.test(context.filename);
     return {
@@ -75,10 +75,12 @@ export const preferHermetic = createRule<[PreferHermeticOptions], MessageIds>({
 
 /**
  * Outermost functions bound to a name: declarations, variable initializers,
- * and object or class members. Callbacks passed as arguments and IIFEs are
- * ignored; marking them would be noise.
+ * and functions stored in object properties. Methods can't be hermetic yet,
+ * and callbacks passed as arguments and IIFEs are ignored; marking them would
+ * be noise.
  */
 export function isCandidate(node: FunctionNode): boolean {
+  if (isMethod(node)) return false;
   for (let ancestor: TSESTree.Node | undefined = node.parent; ancestor; ancestor = ancestor.parent) {
     if (isFunctionNode(ancestor)) return false;
   }

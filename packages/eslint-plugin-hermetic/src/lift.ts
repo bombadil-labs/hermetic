@@ -7,7 +7,23 @@ type Reference = TSESLint.Scope.Reference;
 type SourceCode = Readonly<TSESLint.SourceCode>;
 
 /** Problems a lift can resolve: references to module bindings and globals. */
-const LIFTABLE: ReadonlySet<MessageIds> = new Set(["freeVariable", "shadowedGround", "deniedPath", "aliasedGround"]);
+const LIFTABLE: ReadonlySet<MessageIds> = new Set(["freeVariable"]);
+
+/**
+ * The functions and constructors ECMAScript puts on the global object. Called
+ * without `new`, each ignores its receiver, so the core calls one as
+ * `this.Number(x)`. Any other global the function calls without a receiver,
+ * such as `fetch`, may look at its `this`, so the core calls it without one
+ * too, as `(0, this.fetch)(url)`.
+ */
+const ECMASCRIPT_FUNCTIONS: ReadonlySet<string> = new Set([
+  "AggregateError", "Array", "ArrayBuffer", "BigInt", "BigInt64Array", "BigUint64Array", "Boolean", "DataView", "Date",
+  "decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent", "Error", "escape", "eval", "EvalError",
+  "FinalizationRegistry", "Float16Array", "Float32Array", "Float64Array", "Function", "Int16Array", "Int32Array",
+  "Int8Array", "isFinite", "isNaN", "Iterator", "Map", "Number", "Object", "parseFloat", "parseInt", "Promise", "Proxy",
+  "RangeError", "ReferenceError", "RegExp", "Set", "SharedArrayBuffer", "String", "Symbol", "SyntaxError", "TypeError",
+  "Uint16Array", "Uint32Array", "Uint8Array", "Uint8ClampedArray", "unescape", "URIError", "WeakMap", "WeakRef", "WeakSet",
+]);
 
 /** A binding the lift moves into the function's context. */
 interface Lifted {
@@ -15,8 +31,6 @@ interface Lifted {
   readonly global: boolean;
   /** Written by the function, so the context needs a setter. */
   writable: boolean;
-  /** A global called directly. A bare call runs with the global object as its receiver; keep it that way. */
-  callsHost: boolean;
   /** A global read under `typeof`, which must not throw when the global does not exist. */
   guarded: boolean;
   /**
@@ -51,7 +65,7 @@ export interface LiftPlan {
 /** Why a function was not lifted: the first check it failed. */
 export type LiftBlocker =
   | "structural-only types"
-  | "a method or object member"
+  | "an object member"
   | "not declared at module level"
   | "a named function expression"
   | "a typed variable"
@@ -68,11 +82,11 @@ export type LiftBlocker =
   | "lexical this or new.target"
   | "super"
   | "import.meta or import()"
-  | "writes a ground name"
   | "writes a constant or import"
   | "a lifted name inside a nested function or class"
   | "a const enum"
   | "a declaration that reads unsettled names"
+  | "a direct eval"
   | "another escape";
 
 /**
@@ -139,7 +153,6 @@ export function tryLift(
     const existing = lifted.get(entry.name);
     if (existing) {
       existing.writable ||= entry.writable;
-      existing.callsHost ||= entry.callsHost;
       existing.guarded ||= entry.guarded;
       existing.direct &&= entry.direct;
     } else {
@@ -171,7 +184,7 @@ function liftSite(fn: FunctionNode): LiftSite | LiftBlocker {
     parent.type === AST_NODE_TYPES.MethodDefinition ||
     parent.type === AST_NODE_TYPES.PropertyDefinition
   ) {
-    return "a method or object member";
+    return "an object member";
   }
   if (fn.params.some((param) => param.type === AST_NODE_TYPES.Identifier && param.name === "this")) return "a this parameter or asserts";
   const returns = fn.returnType?.typeAnnotation;
@@ -212,7 +225,6 @@ const PROBLEM_BLOCKERS: Partial<Record<MessageIds, LiftBlocker>> = {
   superReference: "super",
   importMeta: "import.meta or import()",
   dynamicImport: "import.meta or import()",
-  groundWrite: "writes a ground name",
 };
 
 /** `@ts-expect-error` and `@ts-ignore` target lines that move; the author should decide. */
@@ -347,6 +359,23 @@ function usesOwnReceiver(fn: FunctionNode, env: Environment): boolean {
   return found;
 }
 
+/**
+ * True when the core must call `identifier` without a receiver, as the original
+ * did: a global other than ECMAScript's own functions, called bare.
+ */
+function callsWithoutReceiver(identifier: TSESTree.Identifier, entry: Lifted | undefined): boolean {
+  return entry?.global === true && isBareCall(identifier) && !ECMASCRIPT_FUNCTIONS.has(identifier.name);
+}
+
+/** True when `identifier` is called without a receiver: `f()`, or a tagged template. */
+function isBareCall(identifier: TSESTree.Node): boolean {
+  const parent = identifier.parent;
+  return (
+    (parent?.type === AST_NODE_TYPES.CallExpression && parent.callee === identifier) ||
+    (parent?.type === AST_NODE_TYPES.TaggedTemplateExpression && parent.tag === identifier)
+  );
+}
+
 /** True when `this` at `node` would be the core's `this`: no function or class body in between rebinds it. */
 function readsCoreThis(node: TSESTree.Node, fn: FunctionNode): boolean {
   for (let ancestor = node.parent; ancestor && ancestor !== fn; ancestor = ancestor.parent) {
@@ -365,15 +394,14 @@ function classify(reference: Reference, site: LiftSite, assumptions: LiftAssumpt
   // No definition, or only `declare` statements describing it: a global.
   if (!variable || variable.defs.every(isAmbient)) {
     if (reference.isWrite()) return "writes a constant or import";
+    // A bare call to eval is a direct eval, which sees the caller's scope. Called through `this`, it wouldn't.
+    if (name === "eval" && isBareCall(identifier)) return "a direct eval";
     const parent = identifier.parent;
     return {
       name,
       global: true,
       writable: false,
       direct: false,
-      callsHost:
-        (parent.type === AST_NODE_TYPES.CallExpression && parent.callee === identifier) ||
-        (parent.type === AST_NODE_TYPES.TaggedTemplateExpression && parent.tag === identifier),
       guarded: parent.type === AST_NODE_TYPES.UnaryExpression && parent.operator === "typeof",
     };
   }
@@ -385,7 +413,6 @@ function classify(reference: Reference, site: LiftSite, assumptions: LiftAssumpt
     name,
     global: false,
     writable: reference.isWrite(),
-    callsHost: false,
     guarded: false,
     direct: !reference.isWrite() && isSettled(variable, site, assumptions),
     widened: widenedType(variable),
@@ -538,7 +565,11 @@ export function liftFix(
 
   const edits: Edit[] = plan.identifiers.map((identifier) => ({
     range: identifier.range,
-    text: isShorthandValue(identifier) ? `${identifier.name}: this.${identifier.name}` : `this.${identifier.name}`,
+    text: isShorthandValue(identifier)
+      ? `${identifier.name}: this.${identifier.name}`
+      : callsWithoutReceiver(identifier, plan.lifted.get(identifier.name))
+        ? `(0, this.${identifier.name})`
+        : `this.${identifier.name}`,
   }));
   if (typescript) {
     for (const identifier of plan.identifiers) {
@@ -697,8 +728,7 @@ function contextMemberType(entry: Lifted): string {
 
 function contextMembers(entry: Lifted, typescript: boolean): string[] {
   const { name } = entry;
-  let value = entry.callsHost ? `${name}.bind(globalThis)` : name;
-  if (entry.guarded) value = `typeof ${name} === "undefined" ? undefined : ${value}`;
+  const value = entry.guarded ? `typeof ${name} === "undefined" ? undefined : ${name}` : name;
   const members = [`get ${name}()${typescript ? `: ${contextMemberType(entry)}` : ""} { return ${value}; },`];
   if (entry.writable) {
     const param = name === "value" ? "next" : "value";

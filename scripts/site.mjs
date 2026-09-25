@@ -33,7 +33,7 @@ const percent = (n, of) => `${((100 * n) / of).toFixed(1)}%`;
 // The values placeholders can name, formatted for reading.
 
 const HOISTED = "a declaration that reads unsettled names";
-const MEMBERS = "a method or object member";
+const MEMBERS = "an object member";
 
 function library(id) {
   const found = data.libraries.find((entry) => entry.id === id);
@@ -61,6 +61,9 @@ function libraryValues(id) {
     directPct: percent(l.direct, l.candidates),
     shared: count(l.shared),
     sharedPct: percent(l.shared, l.candidates),
+    sharedForGlobals: count(l.sharedForGlobals),
+    methods: count(l.methods),
+    methodsPctOfNamed: percent(l.methods, l.methods + l.candidates),
     skipped: count(l.skipped),
     skippedPct: percent(l.skipped, l.candidates),
     members: count(reason(MEMBERS)),
@@ -83,33 +86,17 @@ function suiteValues(result, label) {
   return { tests: count(result.tests), passed: count(result.passed), failed: count(result.failed), files: count(result.files) };
 }
 
-/** "a", "a and b", "a, b and c". */
-const list = (items) => (items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`);
-
 /**
  * check() against hermetic/sealed on the published JavaScript. The site says
- * they differ only where sealed sees the module, so any other difference
- * fails the build.
+ * they agree on every function, so any difference fails the build, including
+ * one only the module around a function can show.
  */
 function crosscheckValues() {
   const c = data.crosscheck;
   if (!c) throw new Error("corpus.json has no crosscheck results: run npm run corpus -- report");
-  if (c.differing !== 0) throw new Error(`The crosscheck found ${c.differing} unexplained differences between check() and hermetic/sealed`);
-  const shadowed = new Map();
-  for (const entry of c.moduleOnly) {
-    for (const key of entry.reported) {
-      const name = /^shadowedGround:([^@]+)@/.exec(key)?.[1];
-      if (name) shadowed.set(name, (shadowed.get(name) ?? 0) + 1);
-    }
-  }
-  const libraries = c.moduleOnly.map((entry) => data.libraries.find((l) => l.packages.some((p) => entry.file.startsWith(`${p.name}/`)))?.name ?? entry.file);
-  return {
-    functions: count(c.functions),
-    classes: count(c.classes),
-    moduleOnly: count(c.moduleOnly.length),
-    moduleOnlyIn: list([...new Set(libraries)]),
-    shadowed: list([...shadowed].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([name]) => name)),
-  };
+  const differing = c.differing + c.moduleOnly.length;
+  if (differing !== 0) throw new Error(`The crosscheck found ${differing} differences between check() and hermetic/sealed, and the site says there are none`);
+  return { functions: count(c.functions), methods: count(c.methods), classes: count(c.classes) };
 }
 
 const totals = data.libraries.reduce(
@@ -256,14 +243,15 @@ function header(base, current) {
   const links = CASE_STUDIES.map(
     (study) => `<a href="${base}case-studies/${study.id}.html"${study.id === current ? ' aria-current="page"' : ""}>${study.title}</a>`,
   );
-  return `<header class="site-header"><div class="wrap"><a class="brand" href="${base}index.html">${LOGO}hermetic</a><nav class="site-nav" aria-label="Site">${links.join("")}<a href="${REPOSITORY}">GitHub</a></nav></div></header>`;
+  const notice = `<div class="notice"><div class="wrap"><strong>Under development.</strong> These pages describe hermetic 0.3.0, which isn't released yet.</div></div>`;
+  return `<header class="site-header"><div class="wrap"><a class="brand" href="${base}index.html">${LOGO}hermetic</a><nav class="site-nav" aria-label="Site">${links.join("")}<a href="${REPOSITORY}">GitHub</a></nav></div></header>${notice}`;
 }
 
 function footer() {
   return [
     `<footer class="site-footer"><div class="wrap">`,
     `<span>MIT licensed. Every number comes from <code>npm run corpus</code> at <a href="${REPOSITORY}/commit/${escape(data.generated.commit)}">${escape(data.generated.commit)}</a>${data.generated.dirty ? " with uncommitted changes" : ""}, ${escape(data.generated.date.slice(0, 10))}.</span>`,
-    `<span><a href="${REPOSITORY}">GitHub</a> · <a href="https://www.npmjs.com/package/@bombadil/eslint-plugin-hermetic">npm: plugin</a> · <a href="https://www.npmjs.com/package/@bombadil/hermetic">runtime</a></span>`,
+    `<span><a href="${REPOSITORY}">GitHub</a></span>`,
     `</div></footer>`,
     `<script>for (const button of document.querySelectorAll("[data-copy]")) button.addEventListener("click", () => navigator.clipboard?.writeText(button.dataset.copy).then(() => { button.textContent = "Copied"; setTimeout(() => (button.textContent = "Copy"), 1500); }));</script>`,
   ].join("");

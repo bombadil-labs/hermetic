@@ -1,27 +1,21 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { AST_NODE_TYPES, type TSESLint, type TSESTree } from "@typescript-eslint/utils";
 import type { JSONSchema4 } from "@typescript-eslint/utils/json-schema";
 import { childNodes } from "./ast.ts";
-import { loadGround } from "./ground/bootstrap.ts";
-import { DEFAULT_GROUND, type Ground, hasDeniedMembers, isDenied } from "@bombadil/hermetic";
-import { type FunctionNode, staticKey } from "./marking.ts";
+import { IMMUTABLE_GLOBALS } from "@bombadil/hermetic";
+import type { FunctionNode } from "./marking.ts";
 
 type Reference = TSESLint.Scope.Reference;
 type Variable = TSESLint.Scope.Variable;
 type Definition = TSESLint.Scope.Definition;
 
 export type MessageIds =
-  | "aliasedGround"
-  | "deniedPath"
   | "dynamicImport"
   | "freeVariable"
-  | "groundWrite"
   | "importMeta"
   | "jsx"
   | "lexicalNewTarget"
   | "lexicalThis"
-  | "shadowedGround"
+  | "method"
   | "superReference"
   | "typeReference";
 
@@ -34,19 +28,15 @@ export interface Problem {
   readonly reference?: Reference;
 }
 
-/** What "hermetic" means for a lint run: the ground and the strictness options. */
+/** What "hermetic" means for a lint run. */
 export interface Environment {
   readonly sourceCode: Readonly<TSESLint.SourceCode>;
-  readonly ground: Ground;
   readonly structuralOnly: boolean;
-  readonly forbidAliasing: boolean;
 }
 
 /** Options shared by every rule, settable per rule or once in `settings.hermetic`. */
 export interface HermeticSettings {
   types?: "allow" | "structural-only";
-  ground?: string;
-  aliasing?: "best-effort" | "forbid";
 }
 
 export const SETTINGS_SCHEMA: Record<keyof HermeticSettings, JSONSchema4> = {
@@ -55,59 +45,48 @@ export const SETTINGS_SCHEMA: Record<keyof HermeticSettings, JSONSchema4> = {
     enum: ["allow", "structural-only"],
     description: "How to treat type-only references that escape a hermetic function.",
   },
-  ground: {
-    type: "string",
-    description: "Path to a ground bootstrap module, absolute or relative to ESLint's working directory.",
-  },
-  aliasing: {
-    type: "string",
-    enum: ["best-effort", "forbid"],
-    description: "Whether ground objects with denied members may be handed elsewhere.",
-  },
 };
 
 /**
  * Resolves the environment for one file: rule options win over
- * `settings.hermetic`, which wins over the defaults. `selfLint` is the sealed
- * rule, which a ground bootstrap must pass before it runs.
+ * `settings.hermetic`, which wins over the defaults.
  */
 export function createEnvironment(
   context: Readonly<TSESLint.RuleContext<string, readonly unknown[]>>,
   options: HermeticSettings,
-  selfLint: TSESLint.AnyRuleModule,
 ): Environment {
   const settings = readSettings(context.settings);
-  const ground = options.ground ?? settings.ground;
   return {
     sourceCode: context.sourceCode,
-    ground: ground === undefined ? DEFAULT_GROUND : loadGround(resolveGroundPath(ground, context.cwd), selfLint),
     structuralOnly: (options.types ?? settings.types) === "structural-only",
-    forbidAliasing: (options.aliasing ?? settings.aliasing) === "forbid",
   };
 }
+
+/** Settings from before 0.3.0, when hermetic functions could read a list of allowed globals. */
+const REMOVED_SETTINGS = ["ground", "aliasing"];
 
 function readSettings(settings: Record<string, unknown>): HermeticSettings {
   const value = settings.hermetic;
   if (value === undefined) return {};
   if (typeof value !== "object" || value === null) throw new TypeError("settings.hermetic must be an object.");
-  const { types, ground, aliasing } = value as Record<string, unknown>;
+  const found = value as Record<string, unknown>;
+  for (const name of REMOVED_SETTINGS) {
+    if (name in found) {
+      throw new TypeError(
+        `settings.hermetic.${name} was removed in 0.3.0: hermetic functions read no globals, so there is nothing to allow. Pass what they need through 'this' or an argument.`,
+      );
+    }
+  }
+  const { types } = found;
   if (types !== undefined && types !== "allow" && types !== "structural-only") {
     throw new TypeError('settings.hermetic.types must be "allow" or "structural-only".');
   }
-  if (ground !== undefined && typeof ground !== "string") throw new TypeError("settings.hermetic.ground must be a path.");
-  if (aliasing !== undefined && aliasing !== "best-effort" && aliasing !== "forbid") {
-    throw new TypeError('settings.hermetic.aliasing must be "best-effort" or "forbid".');
-  }
-  return { types, ground, aliasing };
-}
-
-function resolveGroundPath(ground: string, cwd: string): string {
-  return ground.startsWith("file:") ? fileURLToPath(ground) : path.resolve(cwd, ground);
+  return { types };
 }
 
 /**
- * Every way `fn` reaches outside itself: references that escape it and are not
- * in the ground, and the syntactic escapes scope analysis cannot see.
+ * Every way `fn` reaches outside itself: references that escape it, and the
+ * syntactic escapes scope analysis cannot see.
  */
 export function analyze(fn: FunctionNode, name: string, env: Environment): Problem[] {
   return [...referenceProblems(fn, name, env), ...escapeProblems(fn, name, env)];
@@ -127,81 +106,11 @@ function referenceProblems(fn: FunctionNode, fnName: string, env: Environment): 
       continue;
     }
     if (isOwnName(reference, fn)) continue;
-    if (!env.ground.names.has(identifier.name)) {
-      problems.push({ node: identifier, messageId: "freeVariable", data, reference });
-    } else if (isShadowed(reference.resolved)) {
-      problems.push({ node: identifier, messageId: "shadowedGround", data, reference });
-    } else if (reference.isWrite()) {
-      problems.push({ node: identifier, messageId: "groundWrite", data, reference });
-    } else {
-      groundAccessProblems(reference, fnName, env, problems);
-    }
+    // undefined, NaN and Infinity read like keywords, unless a declaration outside the function takes the name.
+    if (IMMUTABLE_GLOBALS.includes(identifier.name) && !isShadowed(reference.resolved)) continue;
+    problems.push({ node: identifier, messageId: "freeVariable", data, reference });
   }
   return problems;
-}
-
-/**
- * Follows the static member chain rooted at a ground name, such as
- * `Math.random` or `Math["random"]`, and reports denied paths. Destructuring
- * continues the chain. Anything else ends it: best-effort mode accepts the
- * alias, forbid mode reports it when denied members remain beneath it.
- */
-function groundAccessProblems(reference: Reference, fnName: string, env: Environment, problems: Problem[]): void {
-  const segments = [reference.identifier.name];
-  let node: TSESTree.Node = reference.identifier;
-  for (;;) {
-    if (isDenied(env.ground, segments)) {
-      problems.push({ node, messageId: "deniedPath", data: { path: segments.join("."), fn: fnName }, reference });
-      return;
-    }
-    node = skipTransparentWrappers(node);
-    const parent = node.parent;
-    if (parent?.type !== AST_NODE_TYPES.MemberExpression || parent.object !== node) break;
-    const key = memberKey(parent);
-    if (key === undefined) break;
-    segments.push(key);
-    node = parent;
-  }
-  if (!hasDeniedMembers(env.ground, segments)) return;
-  const pattern = destructuringPattern(node);
-  if (pattern) {
-    patternProblems(pattern, segments, fnName, env, problems, reference);
-  } else if (env.forbidAliasing && !isNonAliasingUse(node)) {
-    problems.push({ node, messageId: "aliasedGround", data: { path: segments.join("."), fn: fnName }, reference });
-  }
-}
-
-function patternProblems(
-  pattern: TSESTree.ObjectPattern,
-  segments: readonly string[],
-  fnName: string,
-  env: Environment,
-  problems: Problem[],
-  reference: Reference,
-): void {
-  for (const property of pattern.properties) {
-    const key = property.type === AST_NODE_TYPES.Property ? propertyKey(property) : undefined;
-    if (property.type === AST_NODE_TYPES.RestElement || key === undefined) {
-      // A rest element or dynamic key can pick up denied members.
-      if (env.forbidAliasing) {
-        const data = { path: segments.join("."), fn: fnName };
-        problems.push({ node: property, messageId: "aliasedGround", data, reference });
-      }
-      continue;
-    }
-    const path = [...segments, key];
-    if (isDenied(env.ground, path)) {
-      problems.push({ node: property, messageId: "deniedPath", data: { path: path.join("."), fn: fnName }, reference });
-      continue;
-    }
-    if (!hasDeniedMembers(env.ground, path)) continue;
-    const target = property.value.type === AST_NODE_TYPES.AssignmentPattern ? property.value.left : property.value;
-    if (target.type === AST_NODE_TYPES.ObjectPattern) {
-      patternProblems(target, path, fnName, env, problems, reference);
-    } else if (env.forbidAliasing) {
-      problems.push({ node: property, messageId: "aliasedGround", data: { path: path.join("."), fn: fnName }, reference });
-    }
-  }
 }
 
 /** `this`, `super`, `new.target`, `import.meta`, `import()` and JSX that reach outside `fn`. */
@@ -317,7 +226,7 @@ function isDeclared(variable: Variable | null): boolean {
 }
 
 /**
- * True when a ground name resolves to a real binding in an enclosing scope
+ * True when a global's name resolves to a real binding in an enclosing scope
  * rather than the global. Ambient `declare` statements only describe globals.
  */
 function isShadowed(variable: Variable | null): boolean {
@@ -347,70 +256,3 @@ function isThisBoundary(ancestor: TSESTree.Node, child: TSESTree.Node): boolean 
       return false;
   }
 }
-
-/** Climbs through wrappers that leave the runtime value unchanged: `x!`, `x as T`, `x satisfies T`, `<T>x`, `a?.b`. */
-function skipTransparentWrappers(node: TSESTree.Node): TSESTree.Node {
-  let current = node;
-  for (let parent = current.parent; parent; parent = current.parent) {
-    switch (parent.type) {
-      case AST_NODE_TYPES.TSNonNullExpression:
-      case AST_NODE_TYPES.TSAsExpression:
-      case AST_NODE_TYPES.TSSatisfiesExpression:
-      case AST_NODE_TYPES.TSTypeAssertion:
-      case AST_NODE_TYPES.ChainExpression:
-        if (parent.expression !== current) return current;
-        current = parent;
-        break;
-      default:
-        return current;
-    }
-  }
-  return current;
-}
-
-function propertyKey(property: TSESTree.Property): string | undefined {
-  if (!property.computed && property.key.type === AST_NODE_TYPES.Identifier) return property.key.name;
-  return staticKey(property.key);
-}
-
-function memberKey(member: TSESTree.MemberExpression): string | undefined {
-  if (member.computed) return staticKey(member.property);
-  return member.property.type === AST_NODE_TYPES.Identifier ? member.property.name : undefined;
-}
-
-/** The object pattern that destructures `node`, as in `const { random } = Math`. */
-function destructuringPattern(node: TSESTree.Node): TSESTree.ObjectPattern | undefined {
-  const parent = node.parent;
-  switch (parent?.type) {
-    case AST_NODE_TYPES.VariableDeclarator:
-      return parent.init === node && parent.id.type === AST_NODE_TYPES.ObjectPattern ? parent.id : undefined;
-    case AST_NODE_TYPES.AssignmentExpression:
-    case AST_NODE_TYPES.AssignmentPattern:
-      return parent.right === node && parent.left.type === AST_NODE_TYPES.ObjectPattern ? parent.left : undefined;
-    default:
-      return undefined;
-  }
-}
-
-/**
- * Uses that read a ground object without handing it anywhere: `typeof`,
- * calling or constructing it, comparisons, and `instanceof` or `in` tests.
- */
-function isNonAliasingUse(node: TSESTree.Node): boolean {
-  const parent = node.parent;
-  switch (parent?.type) {
-    case AST_NODE_TYPES.UnaryExpression:
-      return parent.operator === "typeof";
-    case AST_NODE_TYPES.CallExpression:
-    case AST_NODE_TYPES.NewExpression:
-      return parent.callee === node;
-    case AST_NODE_TYPES.TaggedTemplateExpression:
-      return parent.tag === node;
-    case AST_NODE_TYPES.BinaryExpression:
-      return NON_ALIASING_OPERATORS.has(parent.operator) || (parent.operator === "in" && parent.right === node);
-    default:
-      return false;
-  }
-}
-
-const NON_ALIASING_OPERATORS: ReadonlySet<string> = new Set(["===", "!==", "==", "!=", "instanceof"]);

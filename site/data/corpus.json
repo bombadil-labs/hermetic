@@ -1,7 +1,7 @@
 {
   "generated": {
-    "date": "2026-09-25T16:49:50.440Z",
-    "commit": "bcd07cb",
+    "date": "2026-09-25T21:53:25.637Z",
+    "commit": "ec662a6",
     "dirty": false,
     "node": "v22.22.2"
   },
@@ -16,32 +16,34 @@
         }
       ],
       "files": 362,
-      "candidates": 4634,
-      "hermetic": 1020,
-      "hermeticMembers": 626,
-      "direct": 1451,
-      "shared": 973,
-      "skipped": 1190,
+      "candidates": 3361,
+      "methods": 1273,
+      "hermetic": 516,
+      "hermeticMembers": 196,
+      "direct": 1201,
+      "shared": 1274,
+      "sharedForGlobals": 330,
+      "skipped": 370,
       "reasons": [
         {
-          "reason": "a method or object member",
-          "count": 954
+          "reason": "an object member",
+          "count": 111
         },
         {
           "reason": "a typed variable",
-          "count": 90
-        },
-        {
-          "reason": "a lifted name inside a nested function or class",
-          "count": 58
+          "count": 91
         },
         {
           "reason": "a declaration that reads unsettled names",
-          "count": 51
+          "count": 69
+        },
+        {
+          "reason": "a lifted name inside a nested function or class",
+          "count": 60
         },
         {
           "reason": "reads the stack",
-          "count": 12
+          "count": 14
         },
         {
           "reason": "suppresses type errors",
@@ -74,32 +76,32 @@
         "flatMap": 11
       },
       "validation": {
-        "filesChanged": 235,
+        "filesChanged": 228,
         "parseErrors": 0,
         "sealedErrors": 0,
         "unsettledFiles": 0,
         "typeErrorsIntroduced": 0,
-        "folded": 2424,
+        "folded": 2475,
         "roundTripSkipped": 0,
         "roundTripDiffering": 0,
         "roundTripTypeErrorsIntroduced": 0
       },
       "examples": [
         {
-          "file": "effect/src/Arbitrary.ts",
-          "name": "absurd",
-          "line": 746,
+          "file": "effect/src/MutableList.ts",
+          "name": "reset",
+          "line": 199,
           "outcome": "hermetic",
-          "before": "function absurd(message: string): LazyArbitrary<any> {\n  return () => {\n    throw new Error(message)\n  }\n}",
-          "after": "function absurd(message: string): LazyArbitrary<any> {\n  \"use hermetic\";\n  return () => {\n    throw new Error(message)\n  }\n}"
+          "before": "export const reset = <A>(self: MutableList<A>): MutableList<A> => {\n  ;(self as MutableListImpl<A>)._length = 0\n  self.head = undefined\n  self.tail = undefined\n  return self\n}",
+          "after": "export const reset = <A>(self: MutableList<A>): MutableList<A> => {\n  \"use hermetic\";\n  ;(self as MutableListImpl<A>)._length = 0\n  self.head = undefined\n  self.tail = undefined\n  return self\n}"
         },
         {
-          "file": "effect/src/internal/schedule/interval.ts",
-          "name": "after",
-          "line": 94,
+          "file": "effect/src/Option.ts",
+          "name": "fromNullable",
+          "line": 1009,
           "outcome": "direct",
-          "before": "export const after = (startMilliseconds: number): Interval.Interval => {\n  return make(startMilliseconds, Number.POSITIVE_INFINITY)\n}",
-          "after": "export const after = (startMilliseconds: number): Interval.Interval => afterHermetic.call({ make }, startMilliseconds)\n\nfunction afterHermetic(this: { make: typeof make }, startMilliseconds: number): Interval.Interval {\n  \"use hermetic\";\n  return this.make(startMilliseconds, Number.POSITIVE_INFINITY)\n}"
+          "before": "export const fromNullable = <A>(\n  nullableValue: A\n): Option<NonNullable<A>> => (nullableValue == null ? none() : some(nullableValue as NonNullable<A>))",
+          "after": "export const fromNullable = <A>(\n  nullableValue: A\n): Option<NonNullable<A>> => (fromNullableHermetic<A>).call({ none, some }, nullableValue)\n\nfunction fromNullableHermetic<A>(\n  this: { none: typeof none; some: typeof some },\n  nullableValue: A\n): Option<NonNullable<A>> {\n  \"use hermetic\";\n  return (nullableValue == null ? this.none() : this.some(nullableValue as NonNullable<A>));\n}"
         },
         {
           "file": "effect/src/Array.ts",
@@ -108,6 +110,22 @@
           "outcome": "shared",
           "before": "export const tail = <A>(self: Iterable<A>): Option.Option<Array<A>> => {\n  const input = fromIterable(self)\n  return isNonEmptyReadonlyArray(input) ? Option.some(tailNonEmpty(input)) : Option.none()\n}",
           "after": "export const tail = <A>(self: Iterable<A>): Option.Option<Array<A>> => (tailHermetic<A>).call(tailContext, self)\n\nconst tailContext = {\n  get fromIterable(): typeof fromIterable { return fromIterable; },\n  get isNonEmptyReadonlyArray(): typeof isNonEmptyReadonlyArray { return isNonEmptyReadonlyArray; },\n  get Option(): typeof Option { return Option; },\n  get tailNonEmpty(): typeof tailNonEmpty { return tailNonEmpty; },\n};\n\nfunction tailHermetic<A>(this: { fromIterable: typeof fromIterable; isNonEmptyReadonlyArray: typeof isNonEmptyReadonlyArray; Option: typeof Option; tailNonEmpty: typeof tailNonEmpty }, self: Iterable<A>): Option.Option<Array<A>> {\n  \"use hermetic\";\n  const input = this.fromIterable(self)\n  return this.isNonEmptyReadonlyArray(input) ? this.Option.some(this.tailNonEmpty(input)) : this.Option.none()\n}"
+        },
+        {
+          "file": "effect/src/internal/schedule/interval.ts",
+          "name": "after",
+          "line": 94,
+          "outcome": "shared",
+          "before": "export const after = (startMilliseconds: number): Interval.Interval => {\n  return make(startMilliseconds, Number.POSITIVE_INFINITY)\n}",
+          "after": "export const after = (startMilliseconds: number): Interval.Interval => afterHermetic.call(afterContext, startMilliseconds)\n\nconst afterContext = {\n  get make(): typeof make { return make; },\n  get Number(): typeof Number { return Number; },\n};\n\nfunction afterHermetic(this: { make: typeof make; Number: typeof Number }, startMilliseconds: number): Interval.Interval {\n  \"use hermetic\";\n  return this.make(startMilliseconds, this.Number.POSITIVE_INFINITY)\n}"
+        },
+        {
+          "file": "effect/src/Arbitrary.ts",
+          "name": "absurd",
+          "line": 746,
+          "outcome": "skipped",
+          "reason": "a declaration that reads unsettled names",
+          "before": "function absurd(message: string): LazyArbitrary<any> {\n  return () => {\n    throw new Error(message)\n  }\n}"
         },
         {
           "file": "effect/src/internal/context.ts",
@@ -129,24 +147,26 @@
         }
       ],
       "files": 251,
-      "candidates": 406,
-      "hermetic": 70,
-      "hermeticMembers": 46,
-      "direct": 9,
+      "candidates": 251,
+      "methods": 155,
+      "hermetic": 18,
+      "hermeticMembers": 0,
+      "direct": 7,
       "shared": 0,
-      "skipped": 327,
+      "sharedForGlobals": 0,
+      "skipped": 226,
       "reasons": [
         {
           "reason": "a declaration that reads unsettled names",
-          "count": 204
-        },
-        {
-          "reason": "a method or object member",
-          "count": 113
+          "count": 211
         },
         {
           "reason": "uses its own this, arguments or new.target",
           "count": 6
+        },
+        {
+          "reason": "an object member",
+          "count": 4
         },
         {
           "reason": "a lifted name inside a nested function or class",
@@ -155,21 +175,25 @@
         {
           "reason": "a generic rest parameter",
           "count": 2
+        },
+        {
+          "reason": "reads the stack",
+          "count": 1
         }
       ],
-      "hoistedOnlyImports": 171,
+      "hoistedOnlyImports": 156,
       "unnamed": 15,
       "unnamedPassedTo": {
         "createErrorClass": 8,
         "map": 1
       },
       "validation": {
-        "filesChanged": 45,
+        "filesChanged": 20,
         "parseErrors": 0,
         "sealedErrors": 0,
         "unsettledFiles": 0,
         "typeErrorsIntroduced": 0,
-        "folded": 9,
+        "folded": 7,
         "roundTripSkipped": 0,
         "roundTripDiffering": 0,
         "roundTripTypeErrorsIntroduced": 0
@@ -215,20 +239,22 @@
         }
       ],
       "files": 46,
-      "candidates": 275,
-      "hermetic": 121,
-      "hermeticMembers": 90,
-      "direct": 13,
-      "shared": 4,
-      "skipped": 137,
+      "candidates": 91,
+      "methods": 184,
+      "hermetic": 23,
+      "hermeticMembers": 0,
+      "direct": 10,
+      "shared": 6,
+      "sharedForGlobals": 2,
+      "skipped": 52,
       "reasons": [
         {
-          "reason": "a method or object member",
-          "count": 98
+          "reason": "a declaration that reads unsettled names",
+          "count": 45
         },
         {
-          "reason": "a declaration that reads unsettled names",
-          "count": 36
+          "reason": "an object member",
+          "count": 4
         },
         {
           "reason": "JSX",
@@ -239,16 +265,16 @@
           "count": 1
         }
       ],
-      "hoistedOnlyImports": 20,
+      "hoistedOnlyImports": 16,
       "unnamed": 0,
       "unnamedPassedTo": {},
       "validation": {
-        "filesChanged": 29,
+        "filesChanged": 17,
         "parseErrors": 0,
         "sealedErrors": 0,
         "unsettledFiles": 0,
         "typeErrorsIntroduced": 0,
-        "folded": 17,
+        "folded": 16,
         "roundTripSkipped": 0,
         "roundTripDiffering": 0,
         "roundTripTypeErrorsIntroduced": 0
@@ -269,6 +295,14 @@
           "outcome": "direct",
           "before": "export function hashQueryKeyByOptions<TQueryKey extends QueryKey = QueryKey>(\n  queryKey: TQueryKey,\n  options?: Pick<QueryOptions<any, any, any, any>, 'queryKeyHashFn'>,\n): string {\n  const hashFn = options?.queryKeyHashFn || hashKey\n  return hashFn(queryKey)\n}",
           "after": "export function hashQueryKeyByOptions<TQueryKey extends QueryKey = QueryKey>(\n  queryKey: TQueryKey,\n  options?: Pick<QueryOptions<any, any, any, any>, 'queryKeyHashFn'>,\n): string {\n  return (hashQueryKeyByOptionsHermetic<TQueryKey>).call({ hashKey }, queryKey, options);\n}\n\nfunction hashQueryKeyByOptionsHermetic<TQueryKey extends QueryKey = QueryKey>(\n  this: { hashKey: typeof hashKey },\n  queryKey: TQueryKey,\n  options?: Pick<QueryOptions<any, any, any, any>, 'queryKeyHashFn'>,\n): string {\n  \"use hermetic\";\n  const hashFn = options?.queryKeyHashFn || this.hashKey\n  return hashFn(queryKey)\n}"
+        },
+        {
+          "file": "@tanstack/query-core/src/utils.ts",
+          "name": "timeUntilStale",
+          "line": 136,
+          "outcome": "skipped",
+          "reason": "a declaration that reads unsettled names",
+          "before": "export function timeUntilStale(updatedAt: number, staleTime?: number): number {\n  return Math.max(updatedAt + (staleTime || 0) - Date.now(), 0)\n}"
         },
         {
           "file": "@tanstack/react-query/src/errorBoundaryUtils.ts",
@@ -316,97 +350,23 @@
     "functions": 14416,
     "methods": 1569,
     "classes": 371,
-    "hermetic": 1910,
-    "same": 12497,
+    "hermetic": 1252,
+    "same": 11595,
     "agreed": {
-      "freeVariable": 57871,
-      "lexicalThis": 1230,
-      "deniedPath": 3,
-      "superReference": 26
+      "freeVariable": 56398,
+      "method": 1569,
+      "lexicalThis": 1230
     },
-    "moduleOnly": [
-      {
-        "file": "effect/dist/esm/Cron.js",
-        "line": 187,
-        "name": "parse",
-        "reported": [
-          "shadowedGround:String@67-73"
-        ]
-      },
-      {
-        "file": "effect/dist/esm/Data.js",
-        "line": 296,
-        "name": "TaggedError",
-        "reported": [
-          "shadowedGround:Error@58-63"
-        ]
-      },
-      {
-        "file": "effect/dist/esm/Duration.js",
-        "line": 601,
-        "name": "unsafeFormatIso",
-        "reported": [
-          "shadowedGround:isFinite@50-58"
-        ]
-      },
-      {
-        "file": "effect/dist/esm/Duration.js",
-        "line": 670,
-        "name": "formatIso",
-        "reported": [
-          "shadowedGround:isFinite@52-60"
-        ]
-      },
-      {
-        "file": "effect/dist/esm/LogLevel.js",
-        "line": 115,
-        "name": "fromLiteral",
-        "reported": [
-          "shadowedGround:Error@137-142"
-        ]
-      },
-      {
-        "file": "effect/dist/esm/Micro.js",
-        "line": 2503,
-        "name": "TaggedError",
-        "reported": [
-          "shadowedGround:Error@30-35"
-        ]
-      },
-      {
-        "file": "effect/dist/esm/internal/defaultServices.js",
-        "line": 64,
-        "name": "choice",
-        "reported": [
-          "shadowedGround:Array@30-35"
-        ]
-      },
-      {
-        "file": "effect/dist/esm/internal/fiberRuntime.js",
-        "line": 1343,
-        "name": "<anonymous>",
-        "reported": [
-          "shadowedGround:Boolean@111-118"
-        ]
-      },
-      {
-        "file": "effect/dist/esm/internal/fiberRuntime.js",
-        "line": 1344,
-        "name": "<anonymous>",
-        "reported": [
-          "shadowedGround:Boolean@36-43"
-        ]
-      }
-    ],
+    "moduleOnly": [],
     "differing": 0
   },
   "effect": {
     "tag": "effect@3.22.2",
     "lifted": {
       "source": "lifted",
-      "lifted": 2424,
-      "date": "2026-09-25T16:42:20.775Z",
-      "commit": "bcd07cb",
+      "lifted": 2475,
+      "date": "2026-09-25T21:42:02.457Z",
+      "commit": "ec662a6",
       "dirty": false,
       "files": 520,
       "tests": 6243,
@@ -416,9 +376,9 @@
     },
     "unlifted": {
       "source": "unlifted",
-      "lifted": 2424,
-      "date": "2026-09-25T16:46:47.700Z",
-      "commit": "bcd07cb",
+      "lifted": 2475,
+      "date": "2026-09-25T21:45:58.861Z",
+      "commit": "ec662a6",
       "dirty": false,
       "files": 520,
       "tests": 6243,
@@ -427,30 +387,30 @@
       "skipped": 10
     },
     "bench": {
-      "date": "2026-09-25T16:34:19.400Z",
-      "commit": "bcd07cb",
+      "date": "2026-09-25T21:47:24.991Z",
+      "commit": "ec662a6",
       "dirty": false,
       "node": "v22.22.2",
       "processes": 4,
       "samples": 7,
       "workloads": {
         "Effect.gen, map, flatMap": {
-          "original": 73.95074699999998,
-          "lifted": 91.72338500000001,
-          "unlifted": 75.51537000000008,
-          "control": 72.75278100000003
+          "original": 46.1525529999999,
+          "lifted": 54.24568899999997,
+          "unlifted": 39.107065000000034,
+          "control": 44.44816300000002
         },
         "Chunk, HashMap, Option": {
-          "original": 41.9966129999998,
-          "lifted": 71.98787200000015,
-          "unlifted": 41.73578300000008,
-          "control": 44.51632400000017
+          "original": 29.735090000000127,
+          "lifted": 52.30012799999986,
+          "unlifted": 27.95335299999988,
+          "control": 28.687347000000045
         },
         "Schema decode": {
-          "original": 41.12766300000021,
-          "lifted": 62.297011999999995,
-          "unlifted": 40.83141099999989,
-          "control": 41.050042000000076
+          "original": 26.191669000000047,
+          "lifted": 46.16382199999998,
+          "unlifted": 24.177469999999857,
+          "control": 24.320220999999947
         }
       }
     }

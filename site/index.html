@@ -20,13 +20,11 @@
           <p class="eyebrow">For TypeScript and JavaScript: an ESLint plugin and a runtime check</p>
           <h1>Hermetic functions</h1>
           <p class="lede">
-            A hermetic function reads nothing but its inputs: its arguments, including <code>this</code>, and a short list
-            of allowed globals such as <code>Math</code> and <code>JSON</code>. It doesn't use imports, module-level
-            variables, or globals like <code>fetch</code> and <code>Date</code>. Anything else it needs has to be passed in,
-            so all of its dependencies are visible in its inputs.
+            A hermetic function reads nothing but its inputs: its arguments, including <code>this</code>. It doesn't use
+            imports, module-level variables or globals, not even built-ins such as <code>Math</code>. Anything it needs has
+            to be passed in, so all of its dependencies are visible in its inputs.
           </p>
           <div class="actions">
-            <span class="install"><code>npm install --save-dev @bombadil/eslint-plugin-hermetic</code><button type="button" data-copy="npm install --save-dev @bombadil/eslint-plugin-hermetic">Copy</button></span>
             <a class="button primary" href="#case-studies">Read the case studies</a>
             <a class="button" href="https://github.com/bombadil-labs/hermetic">GitHub</a>
           </div>
@@ -41,7 +39,13 @@
               Every value a function reads is one of its inputs, whether or not it appears in the parameter list. A function
               that reads a module-level variable or calls <code>fetch</code> has inputs its signature doesn't show. The
               <code>hermetic/sealed</code> rule reports every such input in a hermetic function: an import, a module-level
-              variable, a global like <code>fetch</code>, or <code>Math.random</code>.
+              variable, a global like <code>fetch</code>, or a built-in like <code>Math</code>.
+            </p>
+            <p>
+              Built-ins are inputs too: which ones exist, and what they do, depends on the runtime and on any code that
+              replaced them. The code that binds a hermetic function passes in the ones it needs, and
+              <code>intrinsics</code> picks the deterministic ones out of the runtime. <code>undefined</code>,
+              <code>NaN</code> and <code>Infinity</code> can't be changed, so they read like keywords.
             </p>
             <p>
               <code>this</code> is an input like the others: an implicit first argument. <code>.call</code> passes it
@@ -67,7 +71,7 @@
               object. The rule checks names, not where values lead. To run a function you don't trust, use
               <a href="#runtime"><code>confine</code></a>: it runs the function in a
               <a href="https://hardenedjs.org/">Hardened JS</a> compartment, where the shared built-ins are frozen and the
-              global object holds only the allowed globals.
+              global object is empty.
             </p>
           </div>
           <div>
@@ -120,28 +124,23 @@ export const applyPricing = applyDiscount.bind(pricing);</pre>
             <p>
               A hermetic function's source is all of its behavior, so it can be stored, sent and run somewhere else.
               <code>@bombadil/hermetic</code> checks it there, without ESLint. <code>check</code> parses a function's source
-              and reports everything it reads besides its inputs and the allowed globals. <code>confine</code> runs a
-              hermetic function in a <a href="https://hardenedjs.org/">Hardened JS</a> compartment, where the shared
-              built-ins are frozen, the clock and random numbers throw however they are reached, and the global object holds
-              only the allowed globals.
+              and reports everything it reads besides its inputs. <code>confine</code> runs a hermetic function in a
+              <a href="https://hardenedjs.org/">Hardened JS</a> compartment, where the shared built-ins are frozen, the clock
+              and random numbers throw unless they are passed in, and the global object is empty.
             </p>
             <p>
               On the {{crosscheck.functions}} functions and methods in the published JavaScript of Effect, RxJS and TanStack
-              Query, <code>check</code> reports exactly what <code>hermetic/sealed</code> reports, at the same places, except
-              in {{crosscheck.moduleOnly}} functions in {{crosscheck.moduleOnlyIn}} whose modules declare or import names
-              that are also allowed globals: {{crosscheck.shadowed}}. The rule sees the module and reports those; a
-              function's source alone can't show them. So lint functions where they are written, and check them where they
-              arrive.
+              Query, <code>check</code> reports exactly what <code>hermetic/sealed</code> reports, at the same places, every
+              one. So lint functions where they are written, and check them where they arrive.
             </p>
             <p>
-              The checker is hermetic itself. Its parser and allowed globals come in through <code>this</code>, so its own
-              source can be sent to another runtime and bound there, and it passes its own check.
+              The checker is hermetic itself. Its parser comes in through <code>this</code>, and it reads no globals, so its
+              own source can be sent to another runtime and bound there, and it passes its own check.
               <a href="https://github.com/bombadil-labs/hermetic/tree/main/packages/hermetic#readme">The package's README</a>
-              covers both functions.
+              covers <code>check</code>, <code>confine</code> and <code>intrinsics</code>.
             </p>
           </div>
           <div>
-            <pre data-lang="sh">npm install @bombadil/hermetic</pre>
             <pre data-lang="ts">import "ses";
 lockdown(); // once, at startup: the application's decision
 
@@ -164,7 +163,7 @@ area.call(harden({ width: 2, height: 3 }));</pre>
             <h2>Make existing code hermetic</h2>
             <p>
               <code>hermetic/prefer-hermetic</code> finds functions that are already hermetic and marks them. With the
-              <code>lift</code> option, it also rewrites functions that read module-level values. The body moves into a new
+              <code>lift</code> option, it also rewrites functions that read module-level values or globals. The body moves into a new
               hermetic function that receives those values through <code>this</code>, and the original function becomes a
               wrapper that passes them in. Its name, signature and export stay the same, so callers don't change.
             </p>
@@ -172,7 +171,7 @@ area.call(harden({ width: 2, height: 3 }));</pre>
           <pre data-lang="sh">npx eslint --fix --rule '{"hermetic/prefer-hermetic": ["warn", {"lift": true}]}' src/</pre>
           <!-- example @tanstack/query-core/src/utils.ts#hashQueryKeyByOptions -->
           <div class="stats">
-            <div class="stat"><span class="value">{{total.candidates}}</span><span class="label">named functions across Effect, RxJS and TanStack Query</span></div>
+            <div class="stat"><span class="value">{{total.candidates}}</span><span class="label">named functions across Effect, RxJS and TanStack Query, not counting methods</span></div>
             <div class="stat"><span class="value">{{total.hermeticPct}}</span><span class="label">already hermetic, so only marked</span></div>
             <div class="stat"><span class="value">{{total.liftedPct}}</span><span class="label">lifted</span></div>
             <div class="stat"><span class="value">{{total.typeErrorsIntroduced}}</span><span class="label">new type errors</span></div>
@@ -239,36 +238,21 @@ area.call(harden({ width: 2, height: 3 }));</pre>
       </section>
 
       <section>
-        <div class="wrap split">
+        <div class="wrap">
           <div class="prose">
-            <h2>Get started</h2>
+            <h2>Documentation</h2>
             <p>
-              Install the plugin next to <code>typescript-eslint</code> and add the recommended config. Mark a function with a
-              <code>"use hermetic"</code> directive or an <code>@hermetic</code> JSDoc tag. The rule only checks marked
-              functions, so turning it on doesn't affect the rest of your code.
+              hermetic is under development, and version 0.3.0 isn't released yet. A function is marked hermetic with a
+              <code>"use hermetic"</code> directive or an <code>@hermetic</code> JSDoc tag, and <code>hermetic/sealed</code>
+              checks only the functions that are marked.
             </p>
             <p>
-              Documentation:
+              The documentation is on GitHub:
               <a href="https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/sealed.md">hermetic/sealed</a>,
               <a href="https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/prefer-hermetic.md">hermetic/prefer-hermetic</a>,
-              <a href="https://github.com/bombadil-labs/hermetic/tree/main/packages/eslint-plugin-hermetic#allowed-globals">choosing the allowed globals</a>,
+              <a href="https://github.com/bombadil-labs/hermetic/tree/main/packages/eslint-plugin-hermetic#built-ins-come-in-through-this">passing built-ins in</a>,
               and <a href="https://github.com/bombadil-labs/hermetic/tree/main/packages/hermetic#readme">check and confine</a>.
             </p>
-            <p>
-              Up to 0.2.0, the plugin was published as <code>@bombadil/hermetic</code>, which is now the runtime package. If
-              your config imports it, install <code>@bombadil/eslint-plugin-hermetic</code> and change the import.
-            </p>
-          </div>
-          <div>
-            <pre data-lang="js">// eslint.config.js
-import { defineConfig } from "eslint/config";
-import tseslint from "typescript-eslint";
-import hermetic from "@bombadil/eslint-plugin-hermetic";
-
-export default defineConfig(
-  ...tseslint.configs.recommended,
-  hermetic.configs.recommended,
-);</pre>
           </div>
         </div>
       </section>

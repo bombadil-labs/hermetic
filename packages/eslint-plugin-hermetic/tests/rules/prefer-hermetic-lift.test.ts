@@ -3,7 +3,6 @@ import * as tsParser from "@typescript-eslint/parser";
 import { Linter } from "eslint";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { eraseTypes } from "../../src/ground/erase.ts";
 import plugin from "../../src/index.ts";
 import { preferHermetic } from "../../src/rules/prefer-hermetic.ts";
 
@@ -54,6 +53,11 @@ const R = 2;`,
     { name: "a function declaration reading a named import", code: `import { clamp } from "./clamp";
 export function f(a: number) { return clamp(a); }`, options: lift },
     { name: "a function declaration reading a global", code: `export function now() { return Date.now(); }`, options: lift },
+    {
+      name: "a direct eval, which sees the caller's scope, and wouldn't through this",
+      code: `export const run = (code: string) => { const local = 1; return eval(code) + local; };`,
+      options: lift,
+    },
     {
       name: "a default that calls a function, which the core would call again if it returned undefined",
       code: `const R = 1;\ndeclare function fallback(): undefined;\nexport const f = (x = fallback()) => [x, R];`,
@@ -336,8 +340,7 @@ function fix(code: string): { output: string; remaining: Linter.LintMessage[] } 
 
 /** Runs a TypeScript module body in strict mode, as a module would, and returns the named bindings. */
 function run(code: string, names: readonly string[]): Record<string, unknown> {
-  const { ast, visitorKeys } = tsParser.parseForESLint(code, { range: true, loc: true, filePath: "module.ts" });
-  const js = eraseTypes(code, ast, visitorKeys);
+  const js = ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   return new Function(`"use strict";\n${js}\nreturn { ${names.join(", ")} };`)() as Record<string, unknown>;
 }
 
@@ -421,13 +424,23 @@ describe("lift semantics", () => {
       probe: "probe",
     },
     {
-      name: "a host function called bare keeps a global receiver",
-      code: `(globalThis as any).hostFn = function (this: unknown) { return this === undefined || this === globalThis; };\ndeclare const hostFn: () => boolean;\nconst callHost = () => hostFn();\nconst probe = () => [callHost()];`,
+      name: "a host function called bare still gets no receiver",
+      code: `(globalThis as any).hostFn = function (this: unknown) { "use strict"; return this === undefined; };\ndeclare const hostFn: () => boolean;\nconst callHost = () => hostFn();\nconst probe = () => [callHost()];`,
       probe: "probe",
     },
     {
-      name: "a denied path",
+      name: "a host function called bare and read as a value keeps its properties and identity",
+      code: `(globalThis as any).hostFn = Object.assign(function (this: unknown) { "use strict"; return this === undefined; }, { version: 2 });\ndeclare const hostFn: { (): boolean; version: number };\nconst f = () => [hostFn(), hostFn.version, hostFn === (globalThis as any).hostFn, typeof hostFn];\nconst probe = () => [f()];`,
+      probe: "probe",
+    },
+    {
+      name: "a built-in's members, read through the context",
       code: `const roll = () => Math.random() < 2 && Math.max(1, 2) === 2;\nconst probe = () => [roll()];`,
+      probe: "probe",
+    },
+    {
+      name: "a built-in called bare keeps its own properties",
+      code: `const parse = (s: string) => { const n = Number(s); return Number.isNaN(n) ? Number.MAX_SAFE_INTEGER : BigInt(n) + BigInt.asUintN(8, 257n); };\nconst probe = () => [parse("4"), parse("x")];`,
       probe: "probe",
     },
     {
@@ -457,6 +470,12 @@ describe("lift semantics", () => {
       expect((after[probe] as () => unknown)()).toEqual((before[probe] as () => unknown)());
     });
   }
+
+  it("calls a host function without a receiver, and passes it unbound", () => {
+    const { output } = fix(`declare const hostFn: { (): number; version: number };\nexport const f = () => hostFn() + hostFn.version;`);
+    expect(output).toContain("(0, this.hostFn)() + this.hostFn.version");
+    expect(output).toContain("get hostFn(): typeof hostFn { return hostFn; }");
+  });
 
   it("preserves async behavior", async () => {
     const code = `const OFFSET = 5;\nconst later = async (x: number) => x + OFFSET;`;

@@ -1,12 +1,14 @@
 # hermetic/sealed
 
-Require hermetic functions to read nothing but their inputs and the allowed globals.
+Require hermetic functions to read nothing but their inputs.
 
-A hermetic function reads nothing but its inputs, meaning its arguments including `this`, and the allowed globals. It isn't necessarily pure: it can change its inputs, or call methods on them that do I/O. This rule checks that a function marked hermetic uses no names from outside itself other than the allowed globals, and none of the other forms listed below.
+A hermetic function reads nothing but its inputs: its arguments, including `this`. It reads no globals, not even built-ins such as `Math`; the code that binds it passes in what it needs. It isn't necessarily pure: it can change its inputs, or call methods on them that do I/O. This rule checks that a function marked hermetic uses no names from outside itself, and none of the other forms listed below.
 
 ## Marking
 
 A function is hermetic when its body starts with a `"use hermetic"` directive, or when a JSDoc block before it (or before the declaration that introduces it) has an `@hermetic` tag at the start of a line. Unmarked functions are not checked.
+
+Methods can't be hermetic yet. A method's `this` is its object, not its inputs, so a marked method, accessor or class field is reported. A function stored in an object's property, as in `{ area: function () {} }`, is a function, and can be.
 
 ## Rule details
 
@@ -27,12 +29,12 @@ function price(total: number) {
 
 function roll() {
   "use hermetic";
-  return Math.random(); // not allowed by default
+  return Math.random(); // globals are free variables, built-ins included
 }
 
 function now() {
   "use hermetic";
-  return Date.now(); // Date is not an allowed global by default
+  return Date.now(); // pass a clock in instead
 }
 
 const rate = () => {
@@ -40,10 +42,10 @@ const rate = () => {
   return this.rate; // an arrow function's this comes from the enclosing scope
 };
 
-class Pricing extends Base {
+class Pricing {
   apply() {
-    "use hermetic";
-    return super.apply(); // refers to the enclosing class
+    "use hermetic"; // methods can't be hermetic yet
+    return this.rate;
   }
 }
 
@@ -66,10 +68,15 @@ function discount(this: { rate: number }, total: number) {
   return total * (1 - this.rate);
 }
 
-function scale(xs: number[], k: number) {
+function scale(this: { Math: Pick<Math, "round"> }, xs: number[], k: number) {
   "use hermetic";
-  const round = (x: number) => Math.round(x * k); // inner functions may use locals
+  const round = (x: number) => this.Math.round(x * k); // inner functions may use locals, and this
   return xs.map(round);
+}
+
+function orNothing(n: number | undefined) {
+  "use hermetic";
+  return n === undefined ? NaN : n; // undefined, NaN and Infinity read like keywords
 }
 
 function apply(cb: (n: number) => number) {
@@ -93,14 +100,11 @@ function total(invoice: Invoice) {
 
 | Message | Reported when |
 | --- | --- |
-| `freeVariable` | A value reference comes from outside the function, and its name is not an allowed global. |
-| `shadowedGround` | The name of an allowed global refers to a variable declared in an enclosing scope, such as an import or a local. Ambient `declare` statements don't count. |
-| `groundWrite` | The function assigns to an allowed global. |
-| `deniedPath` | A static member chain or destructuring pattern reaches a denied member, such as `Math.random`. |
-| `aliasedGround` | With `aliasing: "forbid"`: an allowed global that has denied members is used in a way that could pass it elsewhere. |
+| `freeVariable` | A value reference comes from outside the function: an import, a module-level variable, or a global, built-ins such as `Math` and `Array` included. `undefined`, `NaN` and `Infinity` read like keywords, unless something outside the function declares the name. |
+| `method` | A method, accessor or class field is marked. Methods can't be hermetic yet. |
 | `typeReference` | With `types: "structural-only"`: a type reference resolves to a declaration outside the function. |
 | `lexicalThis`, `lexicalNewTarget` | `this` or `new.target` inside a hermetic arrow function, or inside an arrow function nested in one, before any function that sets its own `this`. |
-| `superReference` | `super` that refers to a class or object outside the hermetic function. |
+| `superReference` | `super` that refers to a class or object outside the hermetic function, as in an arrow function defined in a method. |
 | `importMeta`, `dynamicImport` | `import.meta` or `import()` anywhere inside the hermetic function. |
 | `jsx` | The root of a JSX tree inside the hermetic function. |
 
@@ -113,26 +117,19 @@ This rule checks names. It can't follow values, so it doesn't stop a hermetic fu
 ```ts
 type Options = {
   types?: "allow" | "structural-only"; // default "allow"
-  ground?: string;
-  aliasing?: "best-effort" | "forbid"; // default "best-effort"
 };
 ```
 
-Each option can also be set once for both rules, in `settings.hermetic`. Options given to the rule take precedence.
+The option can also be set once for both rules, in `settings.hermetic`. Options given to the rule take precedence.
 
 ### `types`
 
 - `"allow"` (default): type-only references may come from outside the function. This includes `typeof x` in a type position, which the scope manager records as a value reference even though it never runs.
 - `"structural-only"`: type references that resolve to a declaration outside the function are reported, including imports, module-level interfaces and type aliases, enclosing type parameters, and `typeof` a module value. TypeScript lib types and undeclared global types are allowed. Write the type of `this` inline, and name it where the function is bound with `ThisParameterType<typeof fn>`.
 
-### `ground`
+### Removed in 0.3.0
 
-A path to the bootstrap that chooses the allowed globals: absolute, relative to ESLint's working directory, or a `file:` URL. Without it, the default list applies. The bootstrap is the export named `ground`, or else the default export. It must itself be marked hermetic. It is linted with this rule, using the default allowed globals, before it runs, and it may only use TypeScript syntax that erases cleanly. See the [README](../../README.md#allowed-globals).
-
-### `aliasing`
-
-- `"best-effort"` (default): denied members are reported where they are statically visible. `const m = Math; m.random()` is not caught.
-- `"forbid"`: an allowed global with denied members may only be used in place: static member access (`Math.max`), destructuring (`const { max } = Math`), `typeof`, calling or constructing it (`new Date(0)`), comparisons, and `instanceof` or `in` tests. Aliases (`const m = Math`), dynamic keys (`Math[key]`), rest elements and passing the object along (`f(Math)`) are reported.
+`ground` and `aliasing` chose which globals a hermetic function could read, and how strictly. Hermetic functions now read no globals, so there is nothing to choose, and setting either throws with an explanation. Build the values instead, in the code that binds hermetic functions. [`intrinsics(realm)`](../../../hermetic/README.md#intrinsics) in `@bombadil/hermetic` picks the deterministic built-ins out of a realm.
 
 ## When not to use it
 

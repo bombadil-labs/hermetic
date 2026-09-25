@@ -21,7 +21,7 @@ describe("the plugin", () => {
   });
 
   it("names itself for ESLint's config inspection and caching", () => {
-    expect(plugin.meta).toEqual({ name: "@bombadil/hermetic", version: expect.any(String) });
+    expect(plugin.meta).toEqual({ name: "@bombadil/eslint-plugin-hermetic", version: expect.any(String) });
     expect(plugin.configs.recommended.plugins?.hermetic).toBe(plugin);
   });
 });

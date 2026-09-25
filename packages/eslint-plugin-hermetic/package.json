@@ -1,0 +1,58 @@
+{
+  "name": "@bombadil/eslint-plugin-hermetic",
+  "version": "0.3.0",
+  "description": "ESLint rules for hermetic functions: functions that read nothing but their inputs.",
+  "license": "MIT",
+  "homepage": "https://github.com/bombadil-labs/hermetic#readme",
+  "bugs": {
+    "url": "https://github.com/bombadil-labs/hermetic/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bombadil-labs/hermetic.git",
+    "directory": "packages/eslint-plugin-hermetic"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "docs"
+  ],
+  "scripts": {
+    "build": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "eslint",
+    "eslintplugin",
+    "eslint-plugin",
+    "typescript-eslint",
+    "hermetic",
+    "closure",
+    "free-variables",
+    "object-capabilities"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": "^22.13.0 || >=24"
+  },
+  "dependencies": {
+    "@bombadil/hermetic": "0.3.0",
+    "@typescript-eslint/utils": "^8.70.1"
+  },
+  "peerDependencies": {
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0 || ^10.0.0"
+  }
+}

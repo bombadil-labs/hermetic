@@ -27,13 +27,13 @@ import { fileURLToPath } from "node:url";
 import * as tsParser from "@typescript-eslint/parser";
 import { Linter } from "eslint";
 import ts from "typescript";
-import { analyze, createEnvironment, isAmbient } from "../src/analysis.ts";
-import plugin from "../src/index.ts";
-import { planLift, tryLift } from "../src/lift.ts";
-import { unlift } from "../src/unlift.ts";
-import { functionName, isFunctionNode, isMarkedHermetic } from "../src/marking.ts";
-import { isCandidate } from "../src/rules/prefer-hermetic.ts";
-import { sealed } from "../src/rules/sealed.ts";
+import { analyze, createEnvironment, isAmbient } from "../packages/eslint-plugin-hermetic/src/analysis.ts";
+import plugin from "../packages/eslint-plugin-hermetic/src/index.ts";
+import { planLift, tryLift } from "../packages/eslint-plugin-hermetic/src/lift.ts";
+import { unlift } from "../packages/eslint-plugin-hermetic/src/unlift.ts";
+import { functionName, isFunctionNode, isMarkedHermetic } from "../packages/eslint-plugin-hermetic/src/marking.ts";
+import { isCandidate } from "../packages/eslint-plugin-hermetic/src/rules/prefer-hermetic.ts";
+import { sealed } from "../packages/eslint-plugin-hermetic/src/rules/sealed.ts";
 
 const PACKAGES = {
   effect: "3.22.2",
@@ -58,7 +58,7 @@ const siteData = fileURLToPath(new URL("../site/data/corpus.json", import.meta.u
  */
 function provenance() {
   const git = (...args) => execFileSync("git", args, { cwd: fileURLToPath(new URL("../", import.meta.url)), encoding: "utf8" }).trim();
-  const dirty = git("status", "--porcelain", "--", "src", "scripts/corpus.mjs", "package.json", "package-lock.json") !== "";
+  const dirty = git("status", "--porcelain", "--", "packages/*/src", "packages/*/package.json", "scripts/corpus.mjs", "package.json", "package-lock.json") !== "";
   return { commit: git("rev-parse", "--short", "HEAD"), dirty };
 }
 
@@ -147,7 +147,7 @@ function runStress() {
   const configurations = {
     default: {},
     strict: { types: "structural-only", aliasing: "forbid" },
-    bootstrap: { ground: fileURLToPath(new URL("../tests/fixtures/grounds/clock.ground.ts", import.meta.url)), aliasing: "forbid" },
+    bootstrap: { ground: fileURLToPath(new URL("../packages/eslint-plugin-hermetic/tests/fixtures/grounds/clock.ground.ts", import.meta.url)), aliasing: "forbid" },
   };
   for (const [label, options] of Object.entries(configurations)) {
     const crashes = [];

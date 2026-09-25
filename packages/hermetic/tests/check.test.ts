@@ -42,7 +42,6 @@ describe("check: forms", () => {
   });
 
   it.each([
-    ["a class", "class Shape {}"],
     ["a number", "42"],
     ["two functions in a sequence", "x => x), (y => y"],
     ["a function and a statement", "x => x); globalThis.leak = 1; (0"],
@@ -57,6 +56,14 @@ describe("check: forms", () => {
       hermetic: false,
       problems: [{ kind: "notAFunction", name: expect.any(String), start: 0, end: source.length }],
     });
+  });
+
+  it.each([
+    ["an empty class", "class Shape {}"],
+    ["an anonymous class", "class { area() { return 0 } }"],
+    ["a class extending an allowed global", "class NotFound extends Error { constructor(m) { super(m) } }"],
+  ])("reads %s as a class", (_label, source) => {
+    expect(check(source)).toEqual({ form: "class", marked: false, hermetic: true, problems: [] });
   });
 
   it("reports a syntax error where parsing stopped", () => {
@@ -263,6 +270,54 @@ describe("check: this, super and the module", () => {
 
   it("reports with statements", () => {
     expect(problems("function (o) { var random; with (o) { return random() } }")).toEqual(["withStatement:with"]);
+  });
+});
+
+describe("check: classes", () => {
+  it("marks a class by its constructor's directive", () => {
+    expect(check('class { constructor(x) { "use hermetic"; this.x = x } }').marked).toBe(true);
+    expect(check('class { m() { "use hermetic" } }').marked).toBe(false);
+  });
+
+  it("checks every part of the class", () => {
+    const source = `class Counter extends Base {
+      static zero = start;
+      [key] = 0;
+      static { log(this) }
+      count() { return helper(this) }
+    }`;
+    expect(problems(source)).toEqual([
+      "freeVariable:Base",
+      "freeVariable:start",
+      "freeVariable:key",
+      "freeVariable:log",
+      "freeVariable:helper",
+    ]);
+  });
+
+  it("binds the class's own name, private names and super inside it", () => {
+    const source = `class Stack extends Array {
+      #size = 0;
+      static of(...items) { return new Stack().push(...items) }
+      push(...items) { this.#size += items.length; return super.push(...items) }
+      get size() { return this.#size }
+    }`;
+    expect(problems(source)).toEqual([]);
+  });
+
+  it("reports this in computed keys, which run outside the class", () => {
+    expect(problems("class { [this.key]() {} }")).toEqual(["lexicalThis:this"]);
+  });
+
+  it("takes a class value", () => {
+    class Point {
+      x = 0;
+      y = 0;
+      norm() {
+        return Math.hypot(this.x, this.y);
+      }
+    }
+    expect(check(Point)).toMatchObject({ form: "class", hermetic: true });
   });
 });
 

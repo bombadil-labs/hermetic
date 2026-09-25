@@ -45,5 +45,8 @@
   },
   "dependencies": {
     "acorn": "^8.18.0"
+  },
+  "devDependencies": {
+    "ses": "^2.3.0"
   }
 }

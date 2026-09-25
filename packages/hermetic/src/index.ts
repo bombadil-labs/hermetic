@@ -1,5 +1,7 @@
 export { check, checkHermetic } from "./check.ts";
-export type { CheckContext, CheckResult, Parse, Problem, ProblemKind } from "./check.ts";
+export type { CheckContext, CheckResult, FunctionLike, Parse, Problem, ProblemKind } from "./check.ts";
+export { confine, HermeticError } from "./confine.ts";
+export type { ConfineOptions, GroundBootstrap } from "./confine.ts";
 export {
   createGround,
   DEFAULT_GROUND,

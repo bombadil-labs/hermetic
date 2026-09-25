@@ -196,7 +196,7 @@ const CONSTRUCTS = { lexicalThis: "this", superReference: "super", lexicalNewTar
  * name the module reassigns.
  */
 function runCrosscheck() {
-  const tally = { files: 0, functions: 0, methods: 0, constructors: 0, hermetic: 0, same: 0, agreed: {} };
+  const tally = { files: 0, functions: 0, methods: 0, constructors: 0, hermetic: 0, same: 0, agreed: {}, classes: 0, hermeticClasses: 0 };
   const moduleOnly = [];
   const differing = [];
   const oracle = {
@@ -208,6 +208,13 @@ function runCrosscheck() {
           const text = context.sourceCode.text;
           const file = path.relative(path.join(root, "published"), context.filename).split(path.sep).join("/");
           return {
+            // sealed has no verdict on a whole class, but check() must read every one as a class.
+            "ClassDeclaration, ClassExpression"(node) {
+              tally.classes++;
+              const result = check(text.slice(node.range[0], node.range[1]));
+              if (result.hermetic) tally.hermeticClasses++;
+              if (result.form !== "class") differing.push({ file, line: node.loc.start.line, name: node.id?.name, class: true, problems: result.problems });
+            },
             ":function"(node) {
               const parent = node.parent;
               const method = parent.type === "MethodDefinition" || (parent.type === "Property" && (parent.method || parent.kind !== "init"));
@@ -276,6 +283,7 @@ function runCrosscheck() {
   row("differ only where sealed sees the module: a shadowed global, a reassigned declaration", moduleOnly.length);
   row("differ otherwise", differing.length);
   console.log(`  (and ${tally.constructors} class constructors, whose source is their whole class)`);
+  console.log(`  Classes, checked whole: ${tally.classes}, all read as classes unless listed below; ${tally.hermeticClasses} hermetic`);
   console.log(`  Problems both found: ${Object.entries(tally.agreed).sort((a, b) => b[1] - a[1]).map(([kind, n]) => `${n} ${kind}`).join(", ")}`);
   for (const record of differing.slice(0, 10)) console.log(`\n  ${record.file}:${record.line} ${record.name ?? ""}\n    sealed only: ${record.sealedOnly?.join(", ") || "-"}\n    check only:  ${record.checkOnly?.join(", ") || record.fatal || "-"}`);
   fs.mkdirSync(resultsDir, { recursive: true });

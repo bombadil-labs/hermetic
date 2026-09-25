@@ -35,7 +35,7 @@ export type ProblemKind =
   | "withStatement"
   /** The source doesn't parse; `name` holds the parser's message. */
   | "syntax"
-  /** The source parses, but not as a single function, method or accessor. */
+  /** The source parses, but not as a single function, method, accessor or class. */
   | "notAFunction";
 
 export interface Problem {
@@ -53,15 +53,20 @@ export interface Problem {
 export interface CheckResult {
   /**
    * `"function"` for a function or arrow function, `"method"` for a method or
-   * accessor, and undefined when the source is not a single function.
+   * accessor, `"class"` for a class, and undefined when the source is none of
+   * these. A class is checked whole: its heritage, computed keys, field
+   * initializers, static blocks and methods.
    */
-  readonly form: "function" | "method" | undefined;
-  /** Its body starts with a `"use hermetic"` directive. */
+  readonly form: "function" | "method" | "class" | undefined;
+  /** Its body starts with a `"use hermetic"` directive; for a class, its constructor's body. */
   readonly marked: boolean;
   /** It reads nothing but its inputs and the allowed globals. */
   readonly hermetic: boolean;
   readonly problems: readonly Problem[];
 }
+
+/** A function or a class. */
+export type FunctionLike = ((...args: never[]) => unknown) | (abstract new (...args: never[]) => unknown);
 
 /**
  * Checks one function's source, as `Function.prototype.toString` returns it,
@@ -69,7 +74,7 @@ export interface CheckResult {
  * the keys of its `allow` matter here. Without one, the default allowed
  * globals apply.
  */
-export function check(fn: string | ((...args: never[]) => unknown), ground?: GroundConfig): CheckResult {
+export function check(fn: string | FunctionLike, ground?: GroundConfig): CheckResult {
   const source = typeof fn === "function" ? Function.prototype.toString.call(fn) : fn;
   const context: CheckContext = {
     parse: parseWithAcorn,
@@ -109,6 +114,7 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
     readonly ownSuper: boolean;
   }
   type FunctionFound = ES.FunctionExpression | ES.ArrowFunctionExpression;
+  type Found = FunctionFound | ES.ClassExpression;
   type Positioned = { readonly start: number; readonly end: number };
 
   const problems: Problem[] = [];
@@ -138,8 +144,8 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
     return typeof value === "object" && value !== null && typeof (value as { type?: unknown }).type === "string";
   }
 
-  // A function or arrow function parses as what a method returns, where `super`
-  // and `new.target` in an arrow function parse, to be reported. A method or
+  // A function, arrow function or class parses as what a method returns, where
+  // `super` and `new.target` in an arrow function parse, to be reported. A method or
   // accessor parses as the only member of a class body, or failing that of an
   // object literal, which also takes methods named `constructor`. Each wrapper
   // closes on a new line, so a trailing line comment can't swallow it, and
@@ -165,11 +171,15 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
     return property.value.type === "FunctionExpression" ? property.value : undefined;
   }
 
-  function functionIn(program: ES.Program): FunctionFound | undefined {
+  function functionIn(program: ES.Program): Found | undefined {
     const body = objectMethodIn(program)?.body.body;
     const statement = body?.length === 1 ? body[0] : undefined;
     const value = statement?.type === "ReturnStatement" ? statement.argument : undefined;
-    return value?.type === "FunctionExpression" || value?.type === "ArrowFunctionExpression" ? value : undefined;
+    return value?.type === "FunctionExpression" ||
+      value?.type === "ArrowFunctionExpression" ||
+      value?.type === "ClassExpression"
+      ? value
+      : undefined;
   }
 
   const wrappers = [
@@ -178,8 +188,8 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
     { form: "method", prefix: "({", suffix: "\n})", find: objectMethodIn },
   ] as const;
 
-  let root: FunctionFound | undefined;
-  let form: "function" | "method" | undefined;
+  let root: Found | undefined;
+  let form: "function" | "method" | "class" | undefined;
   let parsedOtherwise = false;
   // Of the failed parses, the one that got furthest into the source is the likeliest intended form.
   let syntaxError: { message: string; at: number } | undefined;
@@ -201,22 +211,28 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
         continue;
       }
       root = found;
-      form = wrapper.form;
+      form = found.type === "ClassExpression" ? "class" : wrapper.form;
       offset = wrapper.prefix.length;
       break search;
     }
   }
   if (!root || !form) {
     if (parsedOtherwise || !syntaxError) {
-      return failure("notAFunction", "the source is not a single function, method or accessor", 0, source.length);
+      return failure("notAFunction", "the source is not a single function, method, accessor or class", 0, source.length);
     }
     return failure("syntax", syntaxError.message, syntaxError.at, syntaxError.at);
   }
 
-  // Directives lead the body, before any other statement.
+  // Directives lead a function's body, before any other statement. A class is its constructor.
+  const markable =
+    root.type === "ClassExpression"
+      ? root.body.body.find(
+          (member): member is ES.MethodDefinition => member.type === "MethodDefinition" && member.kind === "constructor",
+        )?.value
+      : root;
   let marked = false;
-  if (root.body.type === "BlockStatement") {
-    for (const statement of root.body.body) {
+  if (markable?.body.type === "BlockStatement") {
+    for (const statement of markable.body.body) {
       if (!("directive" in statement)) break;
       if (statement.directive === "use hermetic") marked = true;
     }
@@ -417,7 +433,9 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
         else if (!context.ownThis) report("lexicalNewTarget", "new.target", node);
         return;
       case "ImportExpression":
-        report("dynamicImport", "import()", node);
+        // In two parts, so this function's source never spells out a dynamic
+        // import: Hardened JS refuses to evaluate that text, even in a string.
+        report("dynamicImport", "import" + "()", node);
         visitChildren(node, context);
         return;
       case "MemberExpression": {
@@ -524,7 +542,9 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
   }
 
   const outside = scopeIn(undefined);
-  visitFunction(root, { scope: outside, varScope: outside, ownThis: false, ownSuper: false }, false);
+  const start: Context = { scope: outside, varScope: outside, ownThis: false, ownSuper: false };
+  if (root.type === "ClassExpression") visitClass(root, start);
+  else visitFunction(root, start, false);
 
   function isDenied(path: readonly string[]): boolean {
     return ground.deny.some(

@@ -8,6 +8,9 @@ export default defineConfig({
   },
   test: {
     include: ["packages/*/tests/**/*.test.ts"],
+    // Each test file runs in a process of its own. Keep it that way:
+    // confine.test.ts calls lockdown(), which freezes the built-ins for the rest of its process.
+    isolate: true,
     setupFiles: ["packages/eslint-plugin-hermetic/tests/setup.ts"],
   },
 });

@@ -1,5 +1,8 @@
 # hermetic
 
+> [!NOTE]
+> **Under development.** This README describes hermetic 0.3.0, which isn't released yet.
+
 **A hermetic function reads nothing but its inputs: its arguments, including `this`.** It doesn't use imports, module-level variables or globals, not even built-ins such as `Math`; anything it needs has to be passed in. An ESLint plugin checks the functions you mark as hermetic, and rewrites existing functions so they can be. A runtime package checks a function from its source alone, and runs it confined. The name comes from hermetic builds, which likewise depend only on their declared inputs.
 
 ```ts
@@ -44,11 +47,7 @@ What you get:
 | [`@bombadil/eslint-plugin-hermetic`](packages/eslint-plugin-hermetic) | ESLint rules. `hermetic/sealed` checks the functions you mark as hermetic, and `hermetic/prefer-hermetic` finds functions that already are, and rewrites others so they can be. |
 | [`@bombadil/hermetic`](packages/hermetic) | The same check at runtime, with no ESLint. `check` reads a function's source and reports what it reads besides its inputs, `confine` runs a hermetic function in a [Hardened JS](https://hardenedjs.org/) compartment, and `intrinsics` picks the deterministic built-ins out of the runtime, to pass in. `inject`, if you want it, binds a function to exactly the names it reads. |
 
-In your editor and CI, lint:
-
-```sh
-npm install --save-dev @bombadil/eslint-plugin-hermetic
-```
+The plugin lints in your editor and CI:
 
 ```js
 // eslint.config.js
@@ -64,10 +63,6 @@ export default defineConfig(
 
 Where a function arrives as source, from storage, another process or another person, check it, or run it confined:
 
-```sh
-npm install @bombadil/hermetic
-```
-
 ```ts
 import { check, confine, intrinsics } from "@bombadil/hermetic";
 
@@ -80,7 +75,7 @@ fn.call(harden(intrinsics(globalThis)), input); // the built-ins it uses come in
 
 `check` reports what `hermetic/sealed` reports. On the 14,416 functions and methods in the published JavaScript of Effect, RxJS and TanStack Query, the two report the same problems at the same places, every one.
 
-Up to 0.2.0, `@bombadil/hermetic` was the ESLint plugin. Its rules are now in `@bombadil/eslint-plugin-hermetic`: install it, and change the import in `eslint.config.js`. Hermetic functions read no globals from 0.3.0 on, so the `ground` and `aliasing` settings are gone, and methods can't be hermetic yet.
+Up to 0.2.0, `@bombadil/hermetic` was the ESLint plugin. From 0.3.0, its rules are in `@bombadil/eslint-plugin-hermetic`, hermetic functions read no globals, so the `ground` and `aliasing` settings are gone, and methods can't be hermetic yet.
 
 The rules are documented in [the plugin's README](packages/eslint-plugin-hermetic): [marking a function](packages/eslint-plugin-hermetic/README.md#marking-a-function), [what the rule reports](packages/eslint-plugin-hermetic/README.md#what-the-rule-reports), [built-ins](packages/eslint-plugin-hermetic/README.md#built-ins-come-in-through-this), [options](packages/eslint-plugin-hermetic/README.md#options), [binding `this`](packages/eslint-plugin-hermetic/README.md#binding-this) and [making a codebase hermetic](packages/eslint-plugin-hermetic/README.md#making-a-codebase-hermetic).
 

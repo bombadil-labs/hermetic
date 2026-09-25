@@ -83,6 +83,35 @@ function suiteValues(result, label) {
   return { tests: count(result.tests), passed: count(result.passed), failed: count(result.failed), files: count(result.files) };
 }
 
+/** "a", "a and b", "a, b and c". */
+const list = (items) => (items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`);
+
+/**
+ * check() against hermetic/sealed on the published JavaScript. The site says
+ * they differ only where sealed sees the module, so any other difference
+ * fails the build.
+ */
+function crosscheckValues() {
+  const c = data.crosscheck;
+  if (!c) throw new Error("corpus.json has no crosscheck results: run npm run corpus -- report");
+  if (c.differing !== 0) throw new Error(`The crosscheck found ${c.differing} unexplained differences between check() and hermetic/sealed`);
+  const shadowed = new Map();
+  for (const entry of c.moduleOnly) {
+    for (const key of entry.reported) {
+      const name = /^shadowedGround:([^@]+)@/.exec(key)?.[1];
+      if (name) shadowed.set(name, (shadowed.get(name) ?? 0) + 1);
+    }
+  }
+  const libraries = c.moduleOnly.map((entry) => data.libraries.find((l) => l.packages.some((p) => entry.file.startsWith(`${p.name}/`)))?.name ?? entry.file);
+  return {
+    functions: count(c.functions),
+    classes: count(c.classes),
+    moduleOnly: count(c.moduleOnly.length),
+    moduleOnlyIn: list([...new Set(libraries)]),
+    shadowed: list([...shadowed].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([name]) => name)),
+  };
+}
+
 const totals = data.libraries.reduce(
   (sum, l) => ({
     candidates: sum.candidates + l.candidates,
@@ -97,6 +126,7 @@ const values = {
   effect: { ...libraryValues("effect"), suite: { lifted: suiteValues(data.effect.lifted, "lifted"), unlifted: suiteValues(data.effect.unlifted, "unlifted") } },
   rxjs: libraryValues("rxjs"),
   tanstack: libraryValues("tanstack-query"),
+  crosscheck: crosscheckValues(),
   total: {
     candidates: count(totals.candidates),
     hermetic: count(totals.hermetic),
@@ -152,7 +182,10 @@ function examplePanel(spec, file) {
 function benchTable() {
   const bench = data.effect.bench;
   if (!bench) throw new Error("corpus.json has no benchmark results: run npm run corpus -- bench, then report");
-  const change = (ms, base) => `${ms >= base ? "+" : "−"}${Math.abs(Math.round((100 * (ms - base)) / base))}%`;
+  const change = (ms, base) => {
+    const percent = Math.round((100 * (ms - base)) / base);
+    return percent === 0 ? "0%" : `${percent > 0 ? "+" : "−"}${Math.abs(percent)}%`;
+  };
   const cell = (t, tree) => `<td class="num">${t[tree].toFixed(1)}ms <small>${change(t[tree], t.original)}</small></td>`;
   const rows = Object.entries(bench.workloads).map(
     ([workload, t]) =>
@@ -230,7 +263,7 @@ function footer() {
   return [
     `<footer class="site-footer"><div class="wrap">`,
     `<span>MIT licensed. Every number comes from <code>npm run corpus</code> at <a href="${REPOSITORY}/commit/${escape(data.generated.commit)}">${escape(data.generated.commit)}</a>${data.generated.dirty ? " with uncommitted changes" : ""}, ${escape(data.generated.date.slice(0, 10))}.</span>`,
-    `<span><a href="${REPOSITORY}">GitHub</a> · <a href="https://www.npmjs.com/package/@bombadil/hermetic">npm</a></span>`,
+    `<span><a href="${REPOSITORY}">GitHub</a> · <a href="https://www.npmjs.com/package/@bombadil/eslint-plugin-hermetic">npm: plugin</a> · <a href="https://www.npmjs.com/package/@bombadil/hermetic">runtime</a></span>`,
     `</div></footer>`,
     `<script>for (const button of document.querySelectorAll("[data-copy]")) button.addEventListener("click", () => navigator.clipboard?.writeText(button.dataset.copy).then(() => { button.textContent = "Copied"; setTimeout(() => (button.textContent = "Copy"), 1500); }));</script>`,
   ].join("");

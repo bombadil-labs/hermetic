@@ -88,6 +88,10 @@ pre.shiki {
   background: var(--code-bg) !important;
 }
 
+pre + pre {
+  margin-top: 0.75rem;
+}
+
 .wrap {
   max-width: 1080px;
   margin: 0 auto;

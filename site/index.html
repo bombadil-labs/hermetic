@@ -6,7 +6,7 @@
     <title>Hermetic functions</title>
     <meta
       name="description"
-      content="An ESLint plugin that checks functions read nothing but their inputs, and rewrites existing functions so they do."
+      content="Functions that read nothing but their inputs: an ESLint plugin that checks them and rewrites existing functions to be hermetic, and a runtime package that checks a function's source and runs it confined."
     />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="style.css" />
@@ -17,7 +17,7 @@
     <main>
       <section class="hero">
         <div class="wrap">
-          <p class="eyebrow">An ESLint plugin for TypeScript and JavaScript</p>
+          <p class="eyebrow">For TypeScript and JavaScript: an ESLint plugin and a runtime check</p>
           <h1>Hermetic functions</h1>
           <p class="lede">
             A hermetic function reads nothing but its inputs: its arguments, including <code>this</code>, and a short list
@@ -26,7 +26,7 @@
             so all of its dependencies are visible in its inputs.
           </p>
           <div class="actions">
-            <span class="install"><code>npm install --save-dev @bombadil/hermetic</code><button type="button" data-copy="npm install --save-dev @bombadil/hermetic">Copy</button></span>
+            <span class="install"><code>npm install --save-dev @bombadil/eslint-plugin-hermetic</code><button type="button" data-copy="npm install --save-dev @bombadil/eslint-plugin-hermetic">Copy</button></span>
             <a class="button primary" href="#case-studies">Read the case studies</a>
             <a class="button" href="https://github.com/bombadil-labs/hermetic">GitHub</a>
           </div>
@@ -64,9 +64,10 @@
               <strong>It isn't a sandbox either.</strong> Every value, even a literal, leads through its prototype chain to
               built-ins the whole program shares, and a hermetic function can still change them:
               <code>({}).__proto__.hasOwnProperty = () =&gt; true</code> changes <code>hasOwnProperty</code> for every
-              object. The rule checks names, not where values lead. To confine code you don't trust, use
-              <a href="https://hardenedjs.org/">Hardened JS</a>: it freezes the shared built-ins, and gives code its own
-              global object holding only the globals you choose.
+              object. The rule checks names, not where values lead. To run a function you don't trust, use
+              <a href="#runtime"><code>confine</code></a>: it runs the function in a
+              <a href="https://hardenedjs.org/">Hardened JS</a> compartment, where the shared built-ins are frozen and the
+              global object holds only the allowed globals.
             </p>
           </div>
           <div>
@@ -108,6 +109,51 @@ export const applyPricing = applyDiscount.bind(pricing);</pre>
               <h3>Self-contained changes</h3>
               <p>A function's inputs, the type of <code>this</code> and its body are everything a person or an agent needs to read before changing it.</p>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="runtime">
+        <div class="wrap split">
+          <div class="prose">
+            <h2>Check and confine at runtime</h2>
+            <p>
+              A hermetic function's source is all of its behavior, so it can be stored, sent and run somewhere else.
+              <code>@bombadil/hermetic</code> checks it there, without ESLint. <code>check</code> parses a function's source
+              and reports everything it reads besides its inputs and the allowed globals. <code>confine</code> runs a
+              hermetic function in a <a href="https://hardenedjs.org/">Hardened JS</a> compartment, where the shared
+              built-ins are frozen, the clock and random numbers throw however they are reached, and the global object holds
+              only the allowed globals.
+            </p>
+            <p>
+              On the {{crosscheck.functions}} functions and methods in the published JavaScript of Effect, RxJS and TanStack
+              Query, <code>check</code> reports exactly what <code>hermetic/sealed</code> reports, at the same places, except
+              in {{crosscheck.moduleOnly}} functions in {{crosscheck.moduleOnlyIn}} whose modules declare or import names
+              that are also allowed globals: {{crosscheck.shadowed}}. The rule sees the module and reports those; a
+              function's source alone can't show them. So lint functions where they are written, and check them where they
+              arrive.
+            </p>
+            <p>
+              The checker is hermetic itself. Its parser and allowed globals come in through <code>this</code>, so its own
+              source can be sent to another runtime and bound there, and it passes its own check.
+              <a href="https://github.com/bombadil-labs/hermetic/tree/main/packages/hermetic#readme">The package's README</a>
+              covers both functions.
+            </p>
+          </div>
+          <div>
+            <pre data-lang="sh">npm install @bombadil/hermetic</pre>
+            <pre data-lang="ts">import "ses";
+lockdown(); // once, at startup: the application's decision
+
+import { check, confine } from "@bombadil/hermetic";
+
+check(source);
+// { form: "function", marked: true, hermetic: false,
+//   problems: [{ kind: "freeVariable", name: "rate", … }] }
+
+// A HermeticError, unless it is hermetic:
+const area = confine(source);
+area.call(harden({ width: 2, height: 3 }));</pre>
           </div>
         </div>
       </section>
@@ -202,16 +248,22 @@ export const applyPricing = applyDiscount.bind(pricing);</pre>
               functions, so turning it on doesn't affect the rest of your code.
             </p>
             <p>
-              Documentation: <a href="https://github.com/bombadil-labs/hermetic/blob/main/docs/rules/sealed.md">hermetic/sealed</a>,
-              <a href="https://github.com/bombadil-labs/hermetic/blob/main/docs/rules/prefer-hermetic.md">hermetic/prefer-hermetic</a>,
-              and <a href="https://github.com/bombadil-labs/hermetic#allowed-globals">choosing the allowed globals</a>.
+              Documentation:
+              <a href="https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/sealed.md">hermetic/sealed</a>,
+              <a href="https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/prefer-hermetic.md">hermetic/prefer-hermetic</a>,
+              <a href="https://github.com/bombadil-labs/hermetic/tree/main/packages/eslint-plugin-hermetic#allowed-globals">choosing the allowed globals</a>,
+              and <a href="https://github.com/bombadil-labs/hermetic/tree/main/packages/hermetic#readme">check and confine</a>.
+            </p>
+            <p>
+              Up to 0.2.0, the plugin was published as <code>@bombadil/hermetic</code>, which is now the runtime package. If
+              your config imports it, install <code>@bombadil/eslint-plugin-hermetic</code> and change the import.
             </p>
           </div>
           <div>
             <pre data-lang="js">// eslint.config.js
 import { defineConfig } from "eslint/config";
 import tseslint from "typescript-eslint";
-import hermetic from "@bombadil/hermetic";
+import hermetic from "@bombadil/eslint-plugin-hermetic";
 
 export default defineConfig(
   ...tseslint.configs.recommended,

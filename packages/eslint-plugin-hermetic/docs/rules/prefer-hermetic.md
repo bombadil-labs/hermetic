@@ -129,9 +129,9 @@ On the corpus, unlifting the lifted code gives back the marked original in every
 
 | Workload | Lifted | Unlifted | Original again |
 | --- | --- | --- | --- |
-| `Effect.gen` with `map` and `flatMap` | +25% | +2% | +3% |
-| `Chunk`, `HashMap`, `Option` | +73% | +7% | +8% |
-| `Schema` decoding | +49% | +2% | +2% |
+| `Effect.gen` with `map` and `flatMap` | +24% | +2% | −2% |
+| `Chunk`, `HashMap`, `Option` | +71% | −1% | +6% |
+| `Schema` decoding | +51% | −1% | 0% |
 
 `npm run corpus -- roundtrip`, `npm run corpus -- effect --unlift` and `npm run corpus -- bench` reproduce these, and the [Effect case study](https://bombadil-labs.github.io/hermetic/case-studies/effect.html) has the full story. `unlift` lives in [`src/unlift.ts`](../../src/unlift.ts) and is not exported yet: a bundler plugin that applies it to production builds comes next.
 

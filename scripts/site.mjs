@@ -126,13 +126,13 @@ function sourceLink(file) {
 function outcomeTag(example) {
   switch (example.outcome) {
     case "hermetic":
-      return `<span class="tag">already hermetic: marked</span>`;
+      return `<span class="tag">already hermetic, marked</span>`;
     case "direct":
       return `<span class="tag">lifted, values passed directly</span>`;
     case "shared":
       return `<span class="tag">lifted, shared context</span>`;
     default:
-      return `<span class="tag skipped">left alone: ${escape(example.reason)}</span>`;
+      return `<span class="tag skipped">skipped: ${escape(example.reason)}</span>`;
   }
 }
 
@@ -159,8 +159,8 @@ function benchTable() {
       `<tr><td>${escape(workload)}</td><td class="num">${t.original.toFixed(1)}ms</td>${cell(t, "lifted")}${cell(t, "unlifted")}${cell(t, "control")}</tr>`,
   );
   const caption = [
-    `Effect ${escape(library("effect").packages[0].version)} workloads on Node ${escape(bench.node)}: the best median of ${bench.samples} timings across ${bench.processes} processes per copy, run in rotating order.`,
-    `The last column is a second copy of the original source, so its distance from the first is noise.`,
+    `Effect ${escape(library("effect").packages[0].version)} workloads on Node ${escape(bench.node)}: each figure is the best median of ${bench.samples} timings across ${bench.processes} processes, which ran the copies in rotating order.`,
+    `The last column times a second copy of the original source, so its difference from the first column is noise.`,
   ].join(" ");
   return `<figure class="example"><figcaption>${caption}</figcaption><div class="table-scroll"><table><thead><tr><th>Workload</th><th class="num">Original</th><th class="num">Lifted</th><th class="num">Unlifted</th><th class="num">Original again</th></tr></thead><tbody>${rows.join("")}</tbody></table></div></figure>`;
 }
@@ -170,7 +170,7 @@ function reasonsTable(id) {
   const rows = l.reasons.map(
     (entry) => `<tr><td>${escape(entry.reason)}</td><td class="num">${count(entry.count)}</td><td class="num">${percent(entry.count, l.skipped)}</td></tr>`,
   );
-  return `<div class="table-scroll"><table><thead><tr><th>Why it was left alone</th><th class="num">Functions</th><th class="num">Share</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+  return `<div class="table-scroll"><table><thead><tr><th>Why it was skipped</th><th class="num">Functions</th><th class="num">Share</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 }
 
 function outcomeBar(id) {
@@ -178,11 +178,11 @@ function outcomeBar(id) {
   const lifted = l.direct + l.shared;
   const width = (n) => `${((100 * n) / l.candidates).toFixed(2)}%`;
   return [
-    `<div class="bar" role="img" aria-label="${escape(`${l.name}: ${percent(l.hermetic, l.candidates)} already hermetic, ${percent(lifted, l.candidates)} lifted, ${percent(l.skipped, l.candidates)} left alone`)}">`,
+    `<div class="bar" role="img" aria-label="${escape(`${l.name}: ${percent(l.hermetic, l.candidates)} already hermetic, ${percent(lifted, l.candidates)} lifted, ${percent(l.skipped, l.candidates)} skipped`)}">`,
     `<span class="hermetic" style="width:${width(l.hermetic)}"></span><span class="lifted" style="width:${width(lifted)}"></span></div>`,
     `<div class="legend"><span><i style="background:var(--accent)"></i>Already hermetic ${percent(l.hermetic, l.candidates)}</span>`,
     `<span><i style="background:color-mix(in srgb, var(--accent) 45%, var(--bg))"></i>Lifted ${percent(lifted, l.candidates)}</span>`,
-    `<span><i style="background:var(--line)"></i>Left alone ${percent(l.skipped, l.candidates)}</span></div>`,
+    `<span><i style="background:var(--line)"></i>Skipped ${percent(l.skipped, l.candidates)}</span></div>`,
   ].join("");
 }
 

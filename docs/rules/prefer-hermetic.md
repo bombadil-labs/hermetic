@@ -116,7 +116,7 @@ The fix only applies when the split cannot change behavior or types. It skips:
 - **Lifted functions receive the context as `this`.** The core calls `this.round(...)` where the original called `round(...)`, so `round` runs with the context as `this` instead of `undefined`. Functions that ignore `this`, which is nearly all module functions, are unaffected.
 - **Host functions called bare are bound to `globalThis`**, so that calls such as `this.fetch(url)` keep their receiver. Each read returns a new bound function.
 - **Async functions and generators** become plain functions that return the core's promise or iterator.
-- **Each call costs one more call and some property reads.** In microbenchmarks of Effect's hottest paths (collections, the fiber runtime, Schema decoding), the lifted library ran 15 to 70 percent slower. The cost is per call, so it matters where calls are cheap and frequent. [Unlifting](#unlifting-at-build-time) removes it from builds.
+- **Each call costs one more call and some property reads.** In microbenchmarks of Effect's hottest paths (collections, the fiber runtime, Schema decoding), the lifted library ran 25 to 73 percent slower. The cost is per call, so it matters where calls are cheap and frequent. [Unlifting](#unlifting-at-build-time) removes it from builds.
 - **Formatting and ordering.** The fix emits plain formatting, so run your formatter afterwards. The binding refers to its context and core, which are declared after it, and `no-use-before-define` reports that unless its `functions` and `variables` options are off.
 
 ### Unlifting at build time

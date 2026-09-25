@@ -6,7 +6,7 @@
     <title>Hermetic functions</title>
     <meta
       name="description"
-      content="An ESLint plugin for functions that touch the world only through their arguments and this: checked in your source, applied to a whole codebase in one command, and erased from your build."
+      content="An ESLint plugin that checks functions read nothing but their inputs, and rewrites existing functions so they do."
     />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="style.css" />
@@ -20,9 +20,10 @@
           <p class="eyebrow">An ESLint plugin for TypeScript and JavaScript</p>
           <h1>Hermetic functions</h1>
           <p class="lede">
-            A hermetic function depends only on <strong>what it is handed</strong>: its arguments, <code>this</code>, and a
-            small, explicit ground of harmless globals. It may still mutate and cause effects, but only through what it was
-            handed. So everything it can touch is visible at the call.
+            A hermetic function reads nothing but its inputs: its arguments, including <code>this</code>, and a short list
+            of allowed globals such as <code>Math</code> and <code>JSON</code>. It doesn't use imports, module-level
+            variables, or globals like <code>fetch</code> and <code>Date</code>. Anything else it needs has to be passed in,
+            so all of its dependencies are visible in its inputs.
           </p>
           <div class="actions">
             <span class="install"><code>npm install --save-dev @bombadil/hermetic</code><button type="button" data-copy="npm install --save-dev @bombadil/hermetic">Copy</button></span>
@@ -35,21 +36,29 @@
       <section>
         <div class="wrap split">
           <div class="prose">
-            <h2>Two doors</h2>
+            <h2>Inputs, including <code>this</code></h2>
             <p>
-              A hermetic function's whole world arrives through its arguments and <code>this</code>. The rule,
-              <code>hermetic/sealed</code>, reports everything else it reaches for: a module constant, an import, a global,
-              <code>Math.random</code>.
+              Every value a function reads is one of its inputs, whether or not it appears in the parameter list. A function
+              that reads a module-level variable or calls <code>fetch</code> has inputs its signature doesn't show. The
+              <code>hermetic/sealed</code> rule reports every such input in a hermetic function: an import, a module-level
+              variable, a global like <code>fetch</code>, or <code>Math.random</code>.
             </p>
             <p>
-              Authority is granted in a thin <em>binding layer</em>, ordinary code that builds <code>this</code> and applies
-              it. TypeScript already checks it: a <code>this</code> parameter is typed at every <code>.call</code>,
-              <code>.apply</code> and <code>.bind</code>.
+              <code>this</code> is an input like the others: an implicit first argument. <code>.call</code> passes it
+              explicitly, and <code>.bind</code> fixes it in advance, which is partial application. That makes
+              <code>this</code> a convenient place for dependencies: bind them once, and pass the other arguments at each
+              call. TypeScript type-checks the value of <code>this</code> in every <code>.call</code>, <code>.apply</code>
+              and <code>.bind</code>.
+            </p>
+            <p>
+              The essay <a href="https://myk.pub/thinking-like-a-function-16">Thinking Like a Function</a> explains this
+              way of looking at functions in more depth.
             </p>
             <p class="not">
-              <strong>Hermetic is not pure.</strong> Purity cannot be enforced in JavaScript: any argument can be a Proxy, or
-              carry a getter that does I/O. Hermeticity can. "No free variables" is a syntactic fact that ESLint's scope
-              analysis already computes.
+              <strong>Hermetic doesn't mean pure.</strong> A hermetic function can still change its inputs, or call methods
+              on them that do I/O. Purity can't be checked in JavaScript, because any input can be a Proxy. Whether a
+              function reads anything besides its inputs can be checked, with the same scope analysis ESLint uses to find
+              undefined variables.
             </p>
           </div>
           <div>
@@ -59,7 +68,7 @@
   return { ...invoice, total: this.clamp(discounted) };
 }
 
-// The binding layer: the one place authority is granted.
+// Supply the dependencies once, by binding this.
 const pricing = { rate: config.rate, clamp: toCents };
 export const applyPricing = applyDiscount.bind(pricing);</pre>
           </div>
@@ -69,28 +78,27 @@ export const applyPricing = applyDiscount.bind(pricing);</pre>
       <section>
         <div class="wrap">
           <div class="section-head">
-            <h2>What two doors buy you</h2>
-            <p>Anything standing at the doors sees everything the function can do.</p>
+            <h2>What you get</h2>
           </div>
           <div class="cards">
             <div class="card">
-              <h3>Relocation</h3>
+              <h3>Portable code</h3>
               <p>
-                Move it to another file, a worker or a realm, unchanged. The acid test:
-                <code>new Function("return " + fn.toString())()</code> behaves identically to <code>fn</code>.
+                The function's source is all of its behavior, so it runs the same in another file, a worker or a sandbox:
+                <code>new Function("return " + fn.toString())()</code> behaves exactly like <code>fn</code>.
               </p>
             </div>
             <div class="card">
-              <h3>Mocks, traces, replays</h3>
-              <p>Wrap <code>this</code> in a Proxy and you log every use of the authority the function was granted, with no instrumentation inside it.</p>
+              <h3>Tests without module mocks</h3>
+              <p>Pass test values as inputs instead of mocking modules. Wrap <code>this</code> in a Proxy to record every use of the dependencies the function was given.</p>
             </div>
             <div class="card">
-              <h3>Authority audits</h3>
-              <p>Every grant lives in the binding layer, so "what can touch Stripe?" is answered by reading the wiring.</p>
+              <h3>Dependencies you can find</h3>
+              <p>To find out which functions can call Stripe, look at the code that passes the Stripe client in.</p>
             </div>
             <div class="card">
-              <h3>Context-complete units</h3>
-              <p>Arguments, the <code>this</code> type and the body are everything an agent or a reviewer needs to change the function safely.</p>
+              <h3>Self-contained changes</h3>
+              <p>A function's inputs, the type of <code>this</code> and its body are everything a person or an agent needs to read before changing it.</p>
             </div>
           </div>
         </div>
@@ -99,24 +107,26 @@ export const applyPricing = applyDiscount.bind(pricing);</pre>
       <section>
         <div class="wrap">
           <div class="section-head">
-            <h2>Make a codebase hermetic in one command</h2>
+            <h2>Make existing code hermetic</h2>
             <p>
-              <code>hermetic/prefer-hermetic</code> marks the functions that are hermetic already. With <code>lift</code>,
-              it splits the rest: the body moves into a hermetic core, and the original name becomes a binding that hands
-              the core exactly what it used to take from its surroundings. Callers do not change.
+              <code>hermetic/prefer-hermetic</code> finds functions that are already hermetic and marks them. With the
+              <code>lift</code> option, it also rewrites functions that read module-level values. The body moves into a new
+              hermetic function that receives those values through <code>this</code>, and the original function becomes a
+              wrapper that passes them in. Its name, signature and export stay the same, so callers don't change.
             </p>
           </div>
           <pre data-lang="sh">npx eslint --fix --rule '{"hermetic/prefer-hermetic": ["warn", {"lift": true}]}' src/</pre>
           <!-- example @tanstack/query-core/src/utils.ts#hashQueryKeyByOptions -->
           <div class="stats">
             <div class="stat"><span class="value">{{total.candidates}}</span><span class="label">named functions across Effect, RxJS and TanStack Query</span></div>
-            <div class="stat"><span class="value">{{total.hermeticPct}}</span><span class="label">already hermetic: marked</span></div>
-            <div class="stat"><span class="value">{{total.liftedPct}}</span><span class="label">lifted into a hermetic core</span></div>
+            <div class="stat"><span class="value">{{total.hermeticPct}}</span><span class="label">already hermetic, so only marked</span></div>
+            <div class="stat"><span class="value">{{total.liftedPct}}</span><span class="label">lifted</span></div>
             <div class="stat"><span class="value">{{total.typeErrorsIntroduced}}</span><span class="label">new type errors</span></div>
           </div>
           <p class="prose">
-            The fix applies only where the split cannot change behavior or types, and leaves the rest, with a reason, for a
-            person. On Effect, the library's own test suite passes on its lifted source: {{effect.suite.lifted.passed}} tests, {{effect.suite.lifted.failed}} failures.
+            The fix only rewrites a function when the rewrite can't change its behavior or its types, and leaves every other
+            function as it was. On Effect, the library's own test suite passes on the lifted source:
+            {{effect.suite.lifted.passed}} tests, {{effect.suite.lifted.failed}} failures.
           </p>
         </div>
       </section>
@@ -124,18 +134,19 @@ export const applyPricing = applyDiscount.bind(pricing);</pre>
       <section>
         <div class="wrap">
           <div class="section-head">
-            <h2>Checked in the source, erased in the build</h2>
+            <h2>Removing the cost at build time</h2>
             <p>
-              A lifted function costs one more call and a few property reads each time it runs. The lift has an exact
-              inverse, <code>unlift</code>, which folds every binding back into the function it came from. The source stays
-              hermetic, checked and testable; the build ships the original code.
+              A lifted function makes one extra call and a few property reads each time it runs. <code>unlift</code> reverses
+              the rewrite exactly, turning each wrapper back into the original function, so the source can stay hermetic
+              while the build runs the original code.
             </p>
           </div>
           <!-- bench -->
           <p class="prose">
-            On Effect's hot paths, the unlifted source lands where a second copy of the original does: within noise.
-            Unlifting the lifted corpus gives back the original program in every file, and Effect's
-            {{effect.suite.unlifted.passed}} tests pass on its unlifted source too.
+            In the table, the unlifted source performs like the second copy of the original, so the remaining difference is
+            noise. Unlifting the lifted code gives back the original program in every file, and Effect's
+            {{effect.suite.unlifted.passed}} tests pass on the unlifted source too. <code>unlift</code> isn't part of the
+            published package yet; a bundler plugin that runs it on production builds is next.
           </p>
         </div>
       </section>
@@ -145,27 +156,28 @@ export const applyPricing = applyDiscount.bind(pricing);</pre>
           <div class="section-head">
             <h2>Case studies</h2>
             <p>
-              The plugin, run against three large open-source libraries, with every number reproducible from this
-              repository.
+              We ran the plugin on three large open-source libraries, and every number is reproducible from this repository.
+              If you use Effect, its case study also
+              <a href="case-studies/effect.html#how-hermetic-compares-with-effect">compares hermetic with Effect</a>.
             </p>
           </div>
           <div class="cards">
             <a class="card link" href="case-studies/effect.html">
               <span class="kicker">Effect {{effect.version}}</span>
-              <h3>{{effect.lifted}} functions lifted, every test still green</h3>
-              <p>A functional runtime, split and folded back. What the test suite caught that types did not, and what that did to the design.</p>
+              <h3>{{effect.lifted}} functions lifted, every test still passing</h3>
+              <p>What the lift did to Effect's source, what Effect's test suite caught, and how hermetic compares with Effect.</p>
               <span class="more">Read the Effect case study →</span>
             </a>
             <a class="card link" href="case-studies/rxjs.html">
               <span class="kicker">RxJS {{rxjs.version}}</span>
-              <h3>Why the lift leaves the operators alone</h3>
-              <p>Hoisted declarations, import cycles, and the cost of being exact. What one opt-in would change.</p>
+              <h3>Why the lift skips the operators</h3>
+              <p>Hoisted functions, import cycles, and what treating imports as always initialized would change.</p>
               <span class="more">Read the RxJS case study →</span>
             </a>
             <a class="card link" href="case-studies/tanstack-query.html">
               <span class="kicker">TanStack Query {{tanstack.version}}</span>
               <h3>{{tanstack.hermeticPct}} already hermetic</h3>
-              <p>A utility core, stateful classes and React hooks: what an application-shaped library looks like to the rule.</p>
+              <p>Classes, hooks and helpers: a library shaped more like application code.</p>
               <span class="more">Read the TanStack Query case study →</span>
             </a>
           </div>
@@ -177,14 +189,14 @@ export const applyPricing = applyDiscount.bind(pricing);</pre>
           <div class="prose">
             <h2>Get started</h2>
             <p>
-              Install the plugin next to <code>typescript-eslint</code>, add the recommended config, and mark a function with
-              a <code>"use hermetic"</code> directive or an <code>@hermetic</code> JSDoc tag. The rule checks only marked
-              functions, so it is safe to enable everywhere.
+              Install the plugin next to <code>typescript-eslint</code> and add the recommended config. Mark a function with a
+              <code>"use hermetic"</code> directive or an <code>@hermetic</code> JSDoc tag. The rule only checks marked
+              functions, so turning it on doesn't affect the rest of your code.
             </p>
             <p>
-              Read about <a href="https://github.com/bombadil-labs/hermetic/blob/main/docs/rules/sealed.md">hermetic/sealed</a>,
+              Documentation: <a href="https://github.com/bombadil-labs/hermetic/blob/main/docs/rules/sealed.md">hermetic/sealed</a>,
               <a href="https://github.com/bombadil-labs/hermetic/blob/main/docs/rules/prefer-hermetic.md">hermetic/prefer-hermetic</a>,
-              and <a href="https://github.com/bombadil-labs/hermetic#the-ground">configuring the ground</a>.
+              and <a href="https://github.com/bombadil-labs/hermetic#the-ground">choosing the allowed globals</a>.
             </p>
           </div>
           <div>

@@ -1,3 +1,5 @@
+export { check, checkHermetic } from "./check.ts";
+export type { CheckContext, CheckResult, Parse, Problem, ProblemKind } from "./check.ts";
 export {
   createGround,
   DEFAULT_GROUND,

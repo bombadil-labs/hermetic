@@ -649,7 +649,7 @@ const LIBRARIES = [
 /** The functions the case studies show, as they were and as the fix leaves them. */
 const EXAMPLES = {
   effect: [
-    ["effect/src/Predicate.ts", "isNullable"],
+    ["effect/src/MutableList.ts", "reset"],
     ["effect/src/Option.ts", "fromNullable"],
     ["effect/src/Array.ts", "tail"],
     ["effect/src/internal/schedule/interval.ts", "after"],
@@ -676,10 +676,11 @@ const libraryOf = (file) => LIBRARIES.find((library) => library.sources.some((so
  * What happens to every candidate function: marked, lifted directly or
  * through a shared context, or skipped and why. A skipped declaration also
  * records the kinds of names it reads, and whether it would lift if imports
- * counted as settled. An outermost function bound to no name, such as a
- * callback passed to another function, is not a candidate; it is recorded as
- * unnamed, with the function it is passed to. Nor is a method, which can't be
- * hermetic yet; an outermost one is recorded as a method.
+ * counted as settled. A shared lift records whether it is shared only
+ * because it reads a global. An outermost function bound to no name, such
+ * as a callback passed to another function, is not a candidate; it is
+ * recorded as unnamed, with the function it is passed to. Nor is a method,
+ * which can't be hermetic yet; an outermost one is recorded as a method.
  */
 function censusRecords() {
   const records = [];
@@ -725,7 +726,10 @@ function censusRecords() {
               if (problems.length === 0) return void records.push({ ...record, outcome: "hermetic" });
               const result = tryLift(node, problems, env);
               if (typeof result !== "string") {
-                return void records.push({ ...record, outcome: result.contextName ? "shared" : "direct" });
+                if (!result.contextName) return void records.push({ ...record, outcome: "direct" });
+                // A global can be missing or replaced, so it is never passed directly: is that the only reason for the shared context?
+                const forGlobals = [...result.lifted.values()].every((entry) => entry.direct || entry.global);
+                return void records.push({ ...record, outcome: "shared", ...(forGlobals && { forGlobals }) });
               }
               if (result !== "a declaration that reads unsettled names") return void records.push({ ...record, outcome: "skipped", reason: result });
               const kinds = new Map(problems.map((problem) => [problem.reference.identifier.name, kindOf(problem.reference)]));
@@ -825,6 +829,7 @@ function runReport() {
       hermeticMembers: count((r) => r.outcome === "hermetic" && r.member),
       direct: count((r) => r.outcome === "direct"),
       shared: count((r) => r.outcome === "shared"),
+      sharedForGlobals: count((r) => r.forGlobals),
       skipped: count((r) => r.outcome === "skipped"),
       reasons: [...reasons].sort((a, b) => b[1] - a[1]).map(([reason, n]) => ({ reason, count: n })),
       hoistedOnlyImports: count((r) => r.onlyImports),

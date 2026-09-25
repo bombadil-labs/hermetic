@@ -1,7 +1,7 @@
 {
   "generated": {
-    "date": "2026-09-24T21:35:26.499Z",
-    "commit": "a4c8140",
+    "date": "2026-09-25T16:49:50.440Z",
+    "commit": "bcd07cb",
     "dirty": false,
     "node": "v22.22.2"
   },
@@ -289,13 +289,124 @@
       ]
     }
   ],
+  "crosscheck": {
+    "builds": [
+      {
+        "build": "effect/dist/esm",
+        "version": "3.22.2"
+      },
+      {
+        "build": "rxjs/dist/esm",
+        "version": "7.8.2"
+      },
+      {
+        "build": "rxjs/dist/esm5",
+        "version": "7.8.2"
+      },
+      {
+        "build": "@tanstack/query-core/build/modern",
+        "version": "5.103.2"
+      },
+      {
+        "build": "@tanstack/react-query/build/modern",
+        "version": "5.103.2"
+      }
+    ],
+    "files": 909,
+    "functions": 14416,
+    "methods": 1569,
+    "classes": 371,
+    "hermetic": 1910,
+    "same": 12497,
+    "agreed": {
+      "freeVariable": 57871,
+      "lexicalThis": 1230,
+      "deniedPath": 3,
+      "superReference": 26
+    },
+    "moduleOnly": [
+      {
+        "file": "effect/dist/esm/Cron.js",
+        "line": 187,
+        "name": "parse",
+        "reported": [
+          "shadowedGround:String@67-73"
+        ]
+      },
+      {
+        "file": "effect/dist/esm/Data.js",
+        "line": 296,
+        "name": "TaggedError",
+        "reported": [
+          "shadowedGround:Error@58-63"
+        ]
+      },
+      {
+        "file": "effect/dist/esm/Duration.js",
+        "line": 601,
+        "name": "unsafeFormatIso",
+        "reported": [
+          "shadowedGround:isFinite@50-58"
+        ]
+      },
+      {
+        "file": "effect/dist/esm/Duration.js",
+        "line": 670,
+        "name": "formatIso",
+        "reported": [
+          "shadowedGround:isFinite@52-60"
+        ]
+      },
+      {
+        "file": "effect/dist/esm/LogLevel.js",
+        "line": 115,
+        "name": "fromLiteral",
+        "reported": [
+          "shadowedGround:Error@137-142"
+        ]
+      },
+      {
+        "file": "effect/dist/esm/Micro.js",
+        "line": 2503,
+        "name": "TaggedError",
+        "reported": [
+          "shadowedGround:Error@30-35"
+        ]
+      },
+      {
+        "file": "effect/dist/esm/internal/defaultServices.js",
+        "line": 64,
+        "name": "choice",
+        "reported": [
+          "shadowedGround:Array@30-35"
+        ]
+      },
+      {
+        "file": "effect/dist/esm/internal/fiberRuntime.js",
+        "line": 1343,
+        "name": "<anonymous>",
+        "reported": [
+          "shadowedGround:Boolean@111-118"
+        ]
+      },
+      {
+        "file": "effect/dist/esm/internal/fiberRuntime.js",
+        "line": 1344,
+        "name": "<anonymous>",
+        "reported": [
+          "shadowedGround:Boolean@36-43"
+        ]
+      }
+    ],
+    "differing": 0
+  },
   "effect": {
     "tag": "effect@3.22.2",
     "lifted": {
       "source": "lifted",
       "lifted": 2424,
-      "date": "2026-09-24T21:27:47.449Z",
-      "commit": "a4c8140",
+      "date": "2026-09-25T16:42:20.775Z",
+      "commit": "bcd07cb",
       "dirty": false,
       "files": 520,
       "tests": 6243,
@@ -306,8 +417,8 @@
     "unlifted": {
       "source": "unlifted",
       "lifted": 2424,
-      "date": "2026-09-24T21:32:15.714Z",
-      "commit": "a4c8140",
+      "date": "2026-09-25T16:46:47.700Z",
+      "commit": "bcd07cb",
       "dirty": false,
       "files": 520,
       "tests": 6243,
@@ -316,30 +427,30 @@
       "skipped": 10
     },
     "bench": {
-      "date": "2026-09-24T21:20:16.061Z",
-      "commit": "a4c8140",
+      "date": "2026-09-25T16:34:19.400Z",
+      "commit": "bcd07cb",
       "dirty": false,
       "node": "v22.22.2",
       "processes": 4,
       "samples": 7,
       "workloads": {
         "Effect.gen, map, flatMap": {
-          "original": 83.89157599999999,
-          "lifted": 104.5052169999999,
-          "unlifted": 85.16932599999996,
-          "control": 86.1426919999999
+          "original": 73.95074699999998,
+          "lifted": 91.72338500000001,
+          "unlifted": 75.51537000000008,
+          "control": 72.75278100000003
         },
         "Chunk, HashMap, Option": {
-          "original": 42.745169999999916,
-          "lifted": 74.1591739999999,
-          "unlifted": 45.87023799999997,
-          "control": 45.95234400000004
+          "original": 41.9966129999998,
+          "lifted": 71.98787200000015,
+          "unlifted": 41.73578300000008,
+          "control": 44.51632400000017
         },
         "Schema decode": {
-          "original": 43.982322999999724,
-          "lifted": 65.71193799999992,
-          "unlifted": 44.77925200000027,
-          "control": 44.899055999999746
+          "original": 41.12766300000021,
+          "lifted": 62.297011999999995,
+          "unlifted": 40.83141099999989,
+          "control": 41.050042000000076
         }
       }
     }

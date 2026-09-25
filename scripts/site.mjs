@@ -83,6 +83,35 @@ function suiteValues(result, label) {
   return { tests: count(result.tests), passed: count(result.passed), failed: count(result.failed), files: count(result.files) };
 }
 
+/** "a", "a and b", "a, b and c". */
+const list = (items) => (items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`);
+
+/**
+ * check() against hermetic/sealed on the published JavaScript. The site says
+ * they differ only where sealed sees the module, so any other difference
+ * fails the build.
+ */
+function crosscheckValues() {
+  const c = data.crosscheck;
+  if (!c) throw new Error("corpus.json has no crosscheck results: run npm run corpus -- report");
+  if (c.differing !== 0) throw new Error(`The crosscheck found ${c.differing} unexplained differences between check() and hermetic/sealed`);
+  const shadowed = new Map();
+  for (const entry of c.moduleOnly) {
+    for (const key of entry.reported) {
+      const name = /^shadowedGround:([^@]+)@/.exec(key)?.[1];
+      if (name) shadowed.set(name, (shadowed.get(name) ?? 0) + 1);
+    }
+  }
+  const libraries = c.moduleOnly.map((entry) => data.libraries.find((l) => l.packages.some((p) => entry.file.startsWith(`${p.name}/`)))?.name ?? entry.file);
+  return {
+    functions: count(c.functions),
+    classes: count(c.classes),
+    moduleOnly: count(c.moduleOnly.length),
+    moduleOnlyIn: list([...new Set(libraries)]),
+    shadowed: list([...shadowed].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([name]) => name)),
+  };
+}
+
 const totals = data.libraries.reduce(
   (sum, l) => ({
     candidates: sum.candidates + l.candidates,
@@ -97,6 +126,7 @@ const values = {
   effect: { ...libraryValues("effect"), suite: { lifted: suiteValues(data.effect.lifted, "lifted"), unlifted: suiteValues(data.effect.unlifted, "unlifted") } },
   rxjs: libraryValues("rxjs"),
   tanstack: libraryValues("tanstack-query"),
+  crosscheck: crosscheckValues(),
   total: {
     candidates: count(totals.candidates),
     hermetic: count(totals.hermetic),
@@ -126,13 +156,13 @@ function sourceLink(file) {
 function outcomeTag(example) {
   switch (example.outcome) {
     case "hermetic":
-      return `<span class="tag">already hermetic: marked</span>`;
+      return `<span class="tag">already hermetic, marked</span>`;
     case "direct":
       return `<span class="tag">lifted, values passed directly</span>`;
     case "shared":
       return `<span class="tag">lifted, shared context</span>`;
     default:
-      return `<span class="tag skipped">left alone: ${escape(example.reason)}</span>`;
+      return `<span class="tag skipped">skipped: ${escape(example.reason)}</span>`;
   }
 }
 
@@ -152,15 +182,18 @@ function examplePanel(spec, file) {
 function benchTable() {
   const bench = data.effect.bench;
   if (!bench) throw new Error("corpus.json has no benchmark results: run npm run corpus -- bench, then report");
-  const change = (ms, base) => `${ms >= base ? "+" : "−"}${Math.abs(Math.round((100 * (ms - base)) / base))}%`;
+  const change = (ms, base) => {
+    const percent = Math.round((100 * (ms - base)) / base);
+    return percent === 0 ? "0%" : `${percent > 0 ? "+" : "−"}${Math.abs(percent)}%`;
+  };
   const cell = (t, tree) => `<td class="num">${t[tree].toFixed(1)}ms <small>${change(t[tree], t.original)}</small></td>`;
   const rows = Object.entries(bench.workloads).map(
     ([workload, t]) =>
       `<tr><td>${escape(workload)}</td><td class="num">${t.original.toFixed(1)}ms</td>${cell(t, "lifted")}${cell(t, "unlifted")}${cell(t, "control")}</tr>`,
   );
   const caption = [
-    `Effect ${escape(library("effect").packages[0].version)} workloads on Node ${escape(bench.node)}: the best median of ${bench.samples} timings across ${bench.processes} processes per copy, run in rotating order.`,
-    `The last column is a second copy of the original source, so its distance from the first is noise.`,
+    `Effect ${escape(library("effect").packages[0].version)} workloads on Node ${escape(bench.node)}: each figure is the best median of ${bench.samples} timings across ${bench.processes} processes, which ran the copies in rotating order.`,
+    `The last column times a second copy of the original source, so its difference from the first column is noise.`,
   ].join(" ");
   return `<figure class="example"><figcaption>${caption}</figcaption><div class="table-scroll"><table><thead><tr><th>Workload</th><th class="num">Original</th><th class="num">Lifted</th><th class="num">Unlifted</th><th class="num">Original again</th></tr></thead><tbody>${rows.join("")}</tbody></table></div></figure>`;
 }
@@ -170,7 +203,7 @@ function reasonsTable(id) {
   const rows = l.reasons.map(
     (entry) => `<tr><td>${escape(entry.reason)}</td><td class="num">${count(entry.count)}</td><td class="num">${percent(entry.count, l.skipped)}</td></tr>`,
   );
-  return `<div class="table-scroll"><table><thead><tr><th>Why it was left alone</th><th class="num">Functions</th><th class="num">Share</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+  return `<div class="table-scroll"><table><thead><tr><th>Why it was skipped</th><th class="num">Functions</th><th class="num">Share</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 }
 
 function outcomeBar(id) {
@@ -178,11 +211,11 @@ function outcomeBar(id) {
   const lifted = l.direct + l.shared;
   const width = (n) => `${((100 * n) / l.candidates).toFixed(2)}%`;
   return [
-    `<div class="bar" role="img" aria-label="${escape(`${l.name}: ${percent(l.hermetic, l.candidates)} already hermetic, ${percent(lifted, l.candidates)} lifted, ${percent(l.skipped, l.candidates)} left alone`)}">`,
+    `<div class="bar" role="img" aria-label="${escape(`${l.name}: ${percent(l.hermetic, l.candidates)} already hermetic, ${percent(lifted, l.candidates)} lifted, ${percent(l.skipped, l.candidates)} skipped`)}">`,
     `<span class="hermetic" style="width:${width(l.hermetic)}"></span><span class="lifted" style="width:${width(lifted)}"></span></div>`,
     `<div class="legend"><span><i style="background:var(--accent)"></i>Already hermetic ${percent(l.hermetic, l.candidates)}</span>`,
     `<span><i style="background:color-mix(in srgb, var(--accent) 45%, var(--bg))"></i>Lifted ${percent(lifted, l.candidates)}</span>`,
-    `<span><i style="background:var(--line)"></i>Left alone ${percent(l.skipped, l.candidates)}</span></div>`,
+    `<span><i style="background:var(--line)"></i>Skipped ${percent(l.skipped, l.candidates)}</span></div>`,
   ].join("");
 }
 
@@ -230,7 +263,7 @@ function footer() {
   return [
     `<footer class="site-footer"><div class="wrap">`,
     `<span>MIT licensed. Every number comes from <code>npm run corpus</code> at <a href="${REPOSITORY}/commit/${escape(data.generated.commit)}">${escape(data.generated.commit)}</a>${data.generated.dirty ? " with uncommitted changes" : ""}, ${escape(data.generated.date.slice(0, 10))}.</span>`,
-    `<span><a href="${REPOSITORY}">GitHub</a> · <a href="https://www.npmjs.com/package/@bombadil/hermetic">npm</a></span>`,
+    `<span><a href="${REPOSITORY}">GitHub</a> · <a href="https://www.npmjs.com/package/@bombadil/eslint-plugin-hermetic">npm: plugin</a> · <a href="https://www.npmjs.com/package/@bombadil/hermetic">runtime</a></span>`,
     `</div></footer>`,
     `<script>for (const button of document.querySelectorAll("[data-copy]")) button.addEventListener("click", () => navigator.clipboard?.writeText(button.dataset.copy).then(() => { button.textContent = "Copied"; setTimeout(() => (button.textContent = "Copy"), 1500); }));</script>`,
   ].join("");

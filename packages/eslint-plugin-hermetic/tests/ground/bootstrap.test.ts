@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { GroundBootstrapError, loadGround } from "../../src/ground/bootstrap.ts";
-import { DEFAULT_GROUND, type Ground } from "../../src/ground/ground.ts";
+import { DEFAULT_GROUND, type Ground } from "@bombadil/hermetic";
 import { sealed } from "../../src/rules/sealed.ts";
 import { fixture, repoRoot } from "../helpers.ts";
 

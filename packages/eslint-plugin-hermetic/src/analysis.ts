@@ -4,7 +4,7 @@ import { AST_NODE_TYPES, type TSESLint, type TSESTree } from "@typescript-eslint
 import type { JSONSchema4 } from "@typescript-eslint/utils/json-schema";
 import { childNodes } from "./ast.ts";
 import { loadGround } from "./ground/bootstrap.ts";
-import { DEFAULT_GROUND, type Ground, hasDeniedMembers, isDenied } from "./ground/ground.ts";
+import { DEFAULT_GROUND, type Ground, hasDeniedMembers, isDenied } from "@bombadil/hermetic";
 import { type FunctionNode, staticKey } from "./marking.ts";
 
 type Reference = TSESLint.Scope.Reference;

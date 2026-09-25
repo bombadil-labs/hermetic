@@ -1,15 +1,37 @@
 ---
-title: Effect: {{effect.lifted}} functions lifted, every test still green
-description: What prefer-hermetic did to Effect {{effect.version}}: the functions it marked, lifted and left alone, checked by Effect's own test suite and benchmarks.
+title: Effect: {{effect.lifted}} functions lifted, every test still passing
+description: What prefer-hermetic did to the source of Effect {{effect.version}}, checked against Effect's own test suite and benchmarks, and how hermetic compares with Effect.
 ---
 
-# Effect: {{effect.lifted}} functions lifted, every test still green
+# Effect: {{effect.lifted}} functions lifted, every test still passing
 
-<p class="lede">Effect is a functional runtime for TypeScript: effects, fibers, streams, schemas and a large library of data types. It is the biggest library in the corpus, and the one the lift was tested hardest against: Effect's own test suite ran on the lifted source, and again on the source lifted and then unlifted.</p>
+<p class="lede">Effect is a TypeScript library for writing programs as values, with typed errors, dependency injection, concurrency and streams. This case study runs hermetic on Effect's own source code. Effect is the largest library in the corpus, and the one the lift was tested hardest against: Effect's test suite ran on the lifted source, and again after unlifting it.</p>
 
-This covers the TypeScript source Effect {{effect.version}} ships on npm: {{effect.files}} files and {{effect.candidates}} candidate functions, the outermost functions bound to a name.
+The study covers the TypeScript source that Effect {{effect.version}} publishes to npm: {{effect.files}} files and {{effect.candidates}} candidate functions. A candidate is an outermost function that is bound to a name.
 
-That leaves out a large part of Effect. Much of its API is written as `export const map = dual(2, (self, f) => …)`, where the implementation is an argument to `dual`, bound to no name. The fix does not touch functions like that: {{effect.unnamed}} of them, {{effect.unnamedDual}} passed to `dual`.
+That leaves out a large part of Effect. Much of its API is written as `export const map = dual(2, (self, f) => …)`, where the implementation is an unnamed function passed to `dual`. The plugin doesn't consider unnamed functions, so this study leaves out {{effect.unnamed}} of them, {{effect.unnamedDual}} of which are passed to `dual`.
+
+## How hermetic compares with Effect
+
+Both make a function's dependencies explicit, in different ways. This case study only uses hermetic: it checks Effect's implementation, which is ordinary TypeScript, like any other code.
+
+In Effect, a program is a value of type `Effect<A, E, R>`: `A` is the result, `E` is the error, and `R` lists the services the program needs. Code asks for a service with `yield* Database`, the type checker adds `Database` to `R`, and the program can only run once every service in `R` has been provided, usually by a `Layer`. Effect also handles concurrency, retries, resources, streams and schemas.
+
+Hermetic is a lint rule for plain functions. It checks that a function reads nothing but its inputs, meaning its arguments including `this`, and a short list of allowed globals. It has no runtime and adds no types.
+
+| | Effect | hermetic |
+| --- | --- | --- |
+| What it is | A library and runtime for writing programs as values | An ESLint rule for plain functions |
+| How a function gets its dependencies | As services, listed in the `R` type and provided by layers | As inputs, usually by binding `this` |
+| What is checked | Every service the program asks for has been provided | The function reads nothing but its inputs and the allowed globals |
+| Reading a global directly | Allowed: `Effect.sync(() => Date.now())` adds nothing to `R` | Reported |
+| Adopting it | Write code in Effect's style | Lint existing code; the `lift` fix rewrites what it can |
+
+The two can be used together. `R` lists the services a program asks for. It doesn't list what the code reads without asking, such as `Date.now()` inside `Effect.sync`, or a module-level database client used inside `Effect.tryPromise`. If the functions in an Effect program are hermetic, everything they depend on appears either in `R` or in their inputs. Effect provides the clock and random numbers as services so that tests can replace them; hermetic leaves `Date` and `Math.random` out of its default allowed globals for the same reason.
+
+There is one gap. Hermetic treats imports as values to pass in, including Effect's own modules, so a hermetic function that builds Effect programs needs `Effect` passed in too. The plugin doesn't yet have a way to allow specific packages.
+
+## Results
 
 <!-- outcomes effect -->
 
@@ -17,62 +39,62 @@ That leaves out a large part of Effect. Much of its API is written as `export co
 | --- | ---: | ---: |
 | Already hermetic, marked | {{effect.hermetic}} | {{effect.hermeticPct}} |
 | Lifted, values passed directly | {{effect.direct}} | {{effect.directPct}} |
-| Lifted, through a shared context | {{effect.shared}} | {{effect.sharedPct}} |
-| Left alone | {{effect.skipped}} | {{effect.skippedPct}} |
+| Lifted, values passed through a shared context | {{effect.shared}} | {{effect.sharedPct}} |
+| Skipped | {{effect.skipped}} | {{effect.skippedPct}} |
 
 ## Already hermetic
 
-{{effect.hermetic}} of Effect's functions touch nothing but their arguments and `this`, so the fix only marks them: with a `"use hermetic"` directive, or, for an arrow with an expression body, an `@hermetic` tag in its JSDoc.
+{{effect.hermetic}} of Effect's functions read nothing but their inputs, so the fix only marks them: with a `"use hermetic"` directive, or, for an arrow function with an expression body, an `@hermetic` tag in its JSDoc.
 
 <!-- example effect/src/Arbitrary.ts#absurd -->
 
 ## Lifted
 
-Most of the candidates are module functions that call other module functions: `Array.ts` reads its own helpers and the `Option` module, and the internals read each other. The lift moves each body into a hermetic core that reads those names from `this`, and leaves a binding with the original name, signature and export that hands them over. {{effect.direct}} bindings pass the values directly:
+Most candidates are module-level functions that call other module-level functions. `Array.ts` calls its own helpers and the `Option` module, and Effect's internal modules call each other. The lift moves each function's body into a new hermetic function that reads those names from `this`. The original function keeps its name, signature and export, and becomes a wrapper that passes the names in. {{effect.direct}} wrappers pass the values directly:
 
 <!-- example effect/src/internal/schedule/interval.ts#after -->
 
-That is exact when every name is *settled*: initialized before the binding can run, and never reassigned. `make` is declared above `after`, and `after` is a `const`, so it cannot run before its own line.
+Passing values directly is only safe when every name has been initialized by the time the wrapper can run, and is never reassigned. The lift calls such names *settled*. Here, `make` is declared above `after`, and `after` is a `const`, so `after` can't run before its own line, and by then `make` exists.
 
-A name declared further down the file is different. If the function ran before that line, the original would fail only on a path that reaches the name. So the binding hands over one shared context instead, created right after it, whose getters read each name when the core does. {{effect.shared}} lifts in Effect look like `tail`, which reads `tailNonEmpty`, declared twenty lines below it:
+Names declared further down the file aren't settled. If the function ran before their declarations, the original would only fail if it actually used one of them. To keep that behavior, the wrapper passes a shared context object instead, declared right after it, whose getters read each name only when the hermetic function uses it. {{effect.shared}} lifts in Effect work this way, like `tail`, which uses `tailNonEmpty`, declared twenty lines below it:
 
 <!-- example effect/src/Array.ts#tail -->
 
-## Left alone, and why
+## Skipped, and why
 
 <!-- reasons effect -->
 
-- **Methods and object members** are {{effect.membersPctOfSkipped}} of what was left. Effect builds its data types from prototype objects and classes, and the lift splits only functions declared at the top of a module, because a method's receiver is part of how it is called.
-- **Typed variables**, such as `export const isChunk: { … } = …`, take their type from the annotation rather than from the function. A core declared on its own would lose it.
-- **Lifted names inside nested functions or classes.** `makePrimitive` returns a `function () { … }` that reads the module's `args` symbol. Inside a `function`, `this` is that function's own, so the core's context is out of reach there.
-- **Hoisted declarations** can run before any statement of their module, so they are lifted only when everything they read is always there. In Effect, these mostly read module constants.
-- **Functions that read the stack** would gain a frame. That rule came from Effect's test suite, as the next section explains:
+- **Methods and object members** are {{effect.membersPctOfSkipped}} of the skipped functions. Effect builds its data types from prototype objects and classes. The lift only rewrites functions declared at the top level of a module, because a method already uses `this` for the object it's called on.
+- **Typed variables**, such as `export const isChunk: { … } = …`, get their type from the annotation, not from the function. A separate hermetic function wouldn't have the annotation, so its type would change.
+- **Module names used inside nested functions or classes.** `makePrimitive` returns a `function () { … }` that reads the module's `args` symbol. Inside that inner function, `this` belongs to the inner function, so it can't reach the values passed to the outer one.
+- **Function declarations** are hoisted: they can run before any other line of their module. So they're only lifted when everything they read is guaranteed to exist by then. In Effect, the skipped ones mostly read module constants.
+- **Functions that read the stack** would see an extra stack frame after the rewrite. This rule came from Effect's test suite, as the next section explains:
 
 <!-- example effect/src/internal/context.ts#makeGenericTag -->
 
 ## What the test suite caught
 
-The lift went through the type checker first. Once the lifted corpus type-checked with no new errors, Effect's own test suite ran on it, and 30 of its tests failed.
+The lift was checked with the type checker first. Once the lifted source type-checked with no new errors, we ran Effect's test suite on it, and 30 of its tests failed.
 
-One cause was the stack. `makeGenericTag` records where a tag was defined by lowering `Error.stackTraceLimit` to 2 and keeping the frame above it. Split into a binding and a core, it recorded the binding instead of the caller, and a test that checks the recorded location failed. The lift now leaves alone any function that reads `.stack`, `Error.captureStackTrace`, `Error.prepareStackTrace` or `Error.stackTraceLimit`.
+One cause was the stack. `makeGenericTag` records where a tag was defined by lowering `Error.stackTraceLimit` to 2 and keeping the frame above it. After the rewrite, it recorded the wrapper instead of the caller, and a test that checks the recorded location failed. The lift now skips any function that reads `.stack`, `Error.captureStackTrace`, `Error.prepareStackTrace` or `Error.stackTraceLimit`.
 
-Every other failure came from everything running slower: timeouts, and a test that races a timer. The first binding built its context on every call, as an object literal of getters. V8 keeps an object literal with accessors in dictionary mode, so building one per call was about 790 times slower than the original call in a microbenchmark, and the suite took 2.7 times as long. That is where the two shapes above come from. Settled values go in a plain object literal, which is cheap for V8 to build, and everything else goes through a single context, created once.
+Every other failure came from the code running slower: timeouts, and a test that races a timer. The first version of the wrapper built its context object on every call, as an object literal with getters. V8 stores objects like that in a slower representation, dictionary mode, so building one per call was about 790 times slower than the original call in a microbenchmark, and the test suite took 2.7 times as long. That is why there are two kinds of wrapper today. Settled values go in a plain object literal, which is cheap for V8 to build, and everything else goes through a single context object, created once.
 
-The type checker had caught other things. In the first type check of the lifted corpus, generic functions lost their type arguments through `.call`, unique symbols widened to `symbol`, and functions typed by their variable lost that type. The binding now passes type arguments explicitly and types the shared context, and typed variables are left alone, as are mapped types with `as` clauses and certain generic rest parameters, found in later rounds. Each check found what the others could not, which is why the corpus runs all of them.
+The type checker had found other problems earlier. In the first type check of the lifted code, generic functions lost their type arguments when called through `.call`, unique symbols widened to `symbol`, and functions typed by their variable lost that type. The wrapper now passes type arguments explicitly and gives the shared context explicit types, and typed variables are skipped. Later rounds added two more exclusions: mapped types with `as` clauses, and some generic rest parameters. The type checker, the test suite and the round trip below each found problems the others missed, so the corpus runs all three.
 
-## Checked, then checked again
+## Verification
 
 - **Types:** the fixed source adds {{effect.typeErrorsIntroduced}} type errors.
-- **Round trip:** `unlift` folds all {{effect.folded}} bindings back, and {{effect.roundTripDiffering}} files differ from the original program.
+- **Round trip:** `unlift` turns all {{effect.folded}} lifted functions back into their original form, and {{effect.roundTripDiffering}} files differ from the original program.
 - **Tests:** Effect's suite passes on the lifted source, {{effect.suite.lifted.passed}} tests with {{effect.suite.lifted.failed}} failures, and on the source lifted and then unlifted, {{effect.suite.unlifted.passed}} tests with {{effect.suite.unlifted.failed}} failures.
 
-## The cost, and taking it back
+## Performance
 
-A lifted function costs one more call and a few property reads each time it runs. On Effect's hottest paths that shows:
+A lifted function makes one extra call and a few property reads each time it runs. On Effect's hot paths, that is measurable:
 
 <!-- bench -->
 
-That cost is why the lift has an exact inverse. `unlift` folds each binding back into the function it came from, so the source stays hermetic and the build ships the original code. In the table, the unlifted source lands where the second copy of the original does: within noise of Effect as published.
+`unlift` removes that cost. It turns each wrapper back into the original function, so the source can stay hermetic while the build runs the original code. In the table, the unlifted source performs like the second copy of the original, which means the remaining difference is noise. `unlift` isn't part of the published package yet; a bundler plugin that runs it on production builds is next.
 
 ## Reproduce it
 

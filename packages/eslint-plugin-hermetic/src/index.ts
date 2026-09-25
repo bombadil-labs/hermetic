@@ -39,4 +39,4 @@ export { preferHermetic, sealed };
 export { GroundBootstrapError } from "./ground/bootstrap.ts";
 export type { PreferHermeticOptions } from "./rules/prefer-hermetic.ts";
 export type { SealedOptions } from "./rules/sealed.ts";
-export type { GroundConfig } from "./ground/ground.ts";
+export type { GroundConfig } from "@bombadil/hermetic";

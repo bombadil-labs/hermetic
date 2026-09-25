@@ -6,7 +6,7 @@ import { AST_NODE_TYPES, type TSESLint, type TSESTree } from "@typescript-eslint
 import type { Linter as ESLintLinter } from "eslint";
 import { type FunctionNode, isFunctionNode, isMarkedHermetic } from "../marking.ts";
 import { eraseTypes, NonErasableSyntaxError } from "./erase.ts";
-import { createGround, type Ground } from "./ground.ts";
+import { createGround, type Ground } from "@bombadil/hermetic";
 
 // Loaded lazily: projects on the default ground never pay for the parser.
 const require = createRequire(import.meta.url);

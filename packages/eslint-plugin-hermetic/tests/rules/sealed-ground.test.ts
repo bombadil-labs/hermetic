@@ -1,3 +1,4 @@
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { RuleTester } from "@typescript-eslint/rule-tester";
 import { Linter } from "eslint";
@@ -26,7 +27,7 @@ ruleTester.run("configured ground", sealed, {
     {
       name: "a path relative to the working directory",
       code: `function f(t) { "use hermetic"; return new Date(t); }`,
-      options: [{ ground: "tests/fixtures/grounds/clock.ground.ts" }],
+      options: [{ ground: path.relative(process.cwd(), clock) }],
     },
     {
       name: "a file URL",

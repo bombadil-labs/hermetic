@@ -7,6 +7,8 @@
 //   npm run corpus -- stress     every function analyzed as if marked; nothing may throw
 //   npm run corpus -- fix        `prefer-hermetic --fix` with lift: parses, sealed, settled, no new type errors
 //   npm run corpus -- roundtrip  unlifting the lifted corpus gives back the marked corpus
+//   npm run corpus -- crosscheck every function in the published JavaScript, checked by sealed and by
+//                                check() from its source text alone; the two must find the same problems
 //   npm run corpus -- effect     lifts Effect's own source and runs its test suite (needs git and pnpm);
 //                                with --unlift, lifts and then unlifts it first
 //   npm run corpus -- bench      times Effect workloads on its original, lifted and unlifted source,
@@ -27,13 +29,14 @@ import { fileURLToPath } from "node:url";
 import * as tsParser from "@typescript-eslint/parser";
 import { Linter } from "eslint";
 import ts from "typescript";
-import { analyze, createEnvironment, isAmbient } from "../src/analysis.ts";
-import plugin from "../src/index.ts";
-import { planLift, tryLift } from "../src/lift.ts";
-import { unlift } from "../src/unlift.ts";
-import { functionName, isFunctionNode, isMarkedHermetic } from "../src/marking.ts";
-import { isCandidate } from "../src/rules/prefer-hermetic.ts";
-import { sealed } from "../src/rules/sealed.ts";
+import { analyze, createEnvironment, isAmbient } from "../packages/eslint-plugin-hermetic/src/analysis.ts";
+import plugin from "../packages/eslint-plugin-hermetic/src/index.ts";
+import { planLift, tryLift } from "../packages/eslint-plugin-hermetic/src/lift.ts";
+import { unlift } from "../packages/eslint-plugin-hermetic/src/unlift.ts";
+import { functionName, isFunctionNode, isMarkedHermetic } from "../packages/eslint-plugin-hermetic/src/marking.ts";
+import { isCandidate } from "../packages/eslint-plugin-hermetic/src/rules/prefer-hermetic.ts";
+import { sealed } from "../packages/eslint-plugin-hermetic/src/rules/sealed.ts";
+import { check } from "@bombadil/hermetic";
 
 const PACKAGES = {
   effect: "3.22.2",
@@ -43,6 +46,8 @@ const PACKAGES = {
   "@types/react": "19.3.0",
 };
 const SOURCES = ["effect/src", "rxjs/src", "@tanstack/query-core/src", "@tanstack/react-query/src"];
+/** The ES module builds the packages publish, compiled from those sources. */
+const PUBLISHED = ["effect/dist/esm", "rxjs/dist/esm", "rxjs/dist/esm5", "@tanstack/query-core/build/modern", "@tanstack/react-query/build/modern"];
 const EFFECT = { repository: "https://github.com/Effect-TS/effect", tag: `effect@${PACKAGES.effect}` };
 
 const root = fileURLToPath(new URL("../.corpus/", import.meta.url));
@@ -58,7 +63,7 @@ const siteData = fileURLToPath(new URL("../site/data/corpus.json", import.meta.u
  */
 function provenance() {
   const git = (...args) => execFileSync("git", args, { cwd: fileURLToPath(new URL("../", import.meta.url)), encoding: "utf8" }).trim();
-  const dirty = git("status", "--porcelain", "--", "src", "scripts/corpus.mjs", "package.json", "package-lock.json") !== "";
+  const dirty = git("status", "--porcelain", "--", "packages/*/src", "packages/*/package.json", "scripts/corpus.mjs", "package.json", "package-lock.json") !== "";
   return { commit: git("rev-parse", "--short", "HEAD"), dirty };
 }
 
@@ -147,7 +152,7 @@ function runStress() {
   const configurations = {
     default: {},
     strict: { types: "structural-only", aliasing: "forbid" },
-    bootstrap: { ground: fileURLToPath(new URL("../tests/fixtures/grounds/clock.ground.ts", import.meta.url)), aliasing: "forbid" },
+    bootstrap: { ground: fileURLToPath(new URL("../packages/eslint-plugin-hermetic/tests/fixtures/grounds/clock.ground.ts", import.meta.url)), aliasing: "forbid" },
   };
   for (const [label, options] of Object.entries(configurations)) {
     const crashes = [];
@@ -177,6 +182,114 @@ function runStress() {
     console.log(`Stress (${label}): ${crashes.length} crashes in ${seconds}s`);
     for (const crash of crashes.slice(0, 10)) console.log(`  ${crash}`);
   }
+}
+
+/** What sealed calls each construct it reports, as check() names it. */
+const CONSTRUCTS = { lexicalThis: "this", superReference: "super", lexicalNewTarget: "new.target", importMeta: "import.meta", dynamicImport: "import()" };
+
+/**
+ * Checks every function in the published JavaScript twice: with sealed, as if
+ * it were marked, and with check() on the text Function.prototype.toString
+ * gives for it. Both must report the same problems at the same places, except
+ * where sealed sees the module around the function and check() by design
+ * cannot: a global the module shadows, or a function declaration whose own
+ * name the module reassigns.
+ */
+function runCrosscheck() {
+  const tally = { files: 0, functions: 0, methods: 0, constructors: 0, hermetic: 0, same: 0, agreed: {}, classes: 0, hermeticClasses: 0 };
+  const moduleOnly = [];
+  const differing = [];
+  const oracle = {
+    rules: {
+      compare: {
+        meta: { schema: [], messages: { x: "x" } },
+        create(context) {
+          const env = createEnvironment(context, {}, sealed);
+          const text = context.sourceCode.text;
+          const file = path.relative(path.join(root, "published"), context.filename).split(path.sep).join("/");
+          return {
+            // sealed has no verdict on a whole class, but check() must read every one as a class.
+            "ClassDeclaration, ClassExpression"(node) {
+              tally.classes++;
+              const result = check(text.slice(node.range[0], node.range[1]));
+              if (result.hermetic) tally.hermeticClasses++;
+              if (result.form !== "class") differing.push({ file, line: node.loc.start.line, name: node.id?.name, class: true, problems: result.problems });
+            },
+            ":function"(node) {
+              const parent = node.parent;
+              const method = parent.type === "MethodDefinition" || (parent.type === "Property" && (parent.method || parent.kind !== "init"));
+              // A class constructor is the class: its source is the whole class.
+              if (parent.type === "MethodDefinition" && parent.kind === "constructor") return void tally.constructors++;
+              tally.functions++;
+              if (method) tally.methods++;
+              let [start, end] = method ? parent.range : node.range;
+              // A static method's source starts after `static`.
+              if (parent.type === "MethodDefinition" && parent.static) start += /^static\b\s*/.exec(text.slice(start, end))[0].length;
+              const source = text.slice(start, end);
+              const at = (node, from = start) => `@${node.range[0] - from}-${node.range[1] - from}`;
+              const expected = analyze(node, functionName(node), env).map((problem) => ({
+                kind: problem.messageId,
+                key: `${problem.messageId}:${problem.data.name ?? problem.data.path ?? CONSTRUCTS[problem.messageId]}${at(problem.node)}`,
+                reference: problem.reference,
+              }));
+              const actual = check(source).problems.map((problem) => `${problem.kind}:${problem.name}@${problem.start}-${problem.end}`);
+              const missing = [...actual];
+              const extra = [];
+              for (const { key } of expected) {
+                const index = missing.indexOf(key);
+                if (index === -1) extra.push(key);
+                else missing.splice(index, 1);
+              }
+              if (extra.length === 0 && missing.length === 0) {
+                if (expected.length === 0) tally.hermetic++;
+                else tally.same++;
+                for (const { kind } of expected) tally.agreed[kind] = (tally.agreed[kind] ?? 0) + 1;
+                return;
+              }
+              const record = { file, line: node.loc.start.line, name: functionName(node), sealedOnly: extra, checkOnly: missing, source: source.length > 400 ? `${source.slice(0, 400)}...` : source };
+              // Problems only the module can show: a shadowed global, and a declaration's own name read as a free variable because the module reassigns it.
+              const seesModule = (problem) =>
+                problem.kind === "shadowedGround" ||
+                (problem.kind === "freeVariable" && node.type === "FunctionDeclaration" && problem.reference.resolved?.defs.some((def) => def.node === node));
+              const explained = new Set(expected.filter(seesModule).map((problem) => problem.key));
+              if (missing.length === 0 && extra.every((key) => explained.has(key))) moduleOnly.push(record);
+              else differing.push(record);
+            },
+          };
+        },
+      },
+    },
+  };
+  const linter = new Linter({ cwd: root });
+  const rules = { "oracle/compare": "error" };
+  const started = performance.now();
+  for (const dir of PUBLISHED) {
+    const base = path.join(root, "node_modules", dir);
+    for (const entry of fs.readdirSync(base, { recursive: true })) {
+      if (!String(entry).endsWith(".js")) continue;
+      tally.files++;
+      // Linting node_modules is off, so each file is linted under a name outside it.
+      const filename = path.join(root, "published", dir, String(entry));
+      const config = [{ files: ["**/*.js"], languageOptions: { parser: tsParser }, plugins: { oracle }, linterOptions: { reportUnusedDisableDirectives: "off" }, rules }];
+      const messages = linter.verify(fs.readFileSync(path.join(base, String(entry)), "utf8"), config, { filename });
+      for (const message of messages.filter((m) => m.fatal)) differing.push({ file: path.relative(root, filename), line: message.line, fatal: message.message });
+    }
+  }
+  const seconds = ((performance.now() - started) / 1000).toFixed(1);
+  const row = (label, n) => console.log(`  ${String(n).padStart(6)}  ${label}`);
+  console.log(`\nCrosscheck: ${tally.functions} functions, ${tally.methods} of them methods, in ${tally.files} files of published JavaScript, in ${seconds}s`);
+  row("hermetic, by both", tally.hermetic);
+  row("the same problems at the same places", tally.same);
+  row("differ only where sealed sees the module: a shadowed global, a reassigned declaration", moduleOnly.length);
+  row("differ otherwise", differing.length);
+  console.log(`  (and ${tally.constructors} class constructors, whose source is their whole class)`);
+  console.log(`  Classes, checked whole: ${tally.classes}, all read as classes unless listed below; ${tally.hermeticClasses} hermetic`);
+  console.log(`  Problems both found: ${Object.entries(tally.agreed).sort((a, b) => b[1] - a[1]).map(([kind, n]) => `${n} ${kind}`).join(", ")}`);
+  for (const record of differing.slice(0, 10)) console.log(`\n  ${record.file}:${record.line} ${record.name ?? ""}\n    sealed only: ${record.sealedOnly?.join(", ") || "-"}\n    check only:  ${record.checkOnly?.join(", ") || record.fatal || "-"}`);
+  fs.mkdirSync(resultsDir, { recursive: true });
+  const result = { date: new Date().toISOString(), ...provenance(), node: process.version, packages: PACKAGES, published: PUBLISHED, ...tally, moduleOnly, differing };
+  fs.writeFileSync(path.join(resultsDir, "crosscheck.json"), `${JSON.stringify(result, null, 1)}\n`);
+  return result;
 }
 
 function typeErrors(dir) {
@@ -669,6 +782,7 @@ function runReport() {
   const records = writeRecords(censusRecords());
   const fixed = runFix();
   const roundtrip = runRoundtrip();
+  const crosscheck = runCrosscheck();
   const libraries = LIBRARIES.map((library) => {
     const mine = records.filter((record) => libraryOf(record.file) === library);
     const count = (test) => mine.filter(test).length;
@@ -729,6 +843,18 @@ function runReport() {
   const data = {
     generated,
     libraries,
+    crosscheck: {
+      builds: PUBLISHED.map((build) => ({ build, version: PACKAGES[Object.keys(PACKAGES).find((name) => build.startsWith(`${name}/`))] })),
+      files: crosscheck.files,
+      functions: crosscheck.functions,
+      methods: crosscheck.methods,
+      classes: crosscheck.classes,
+      hermetic: crosscheck.hermetic,
+      same: crosscheck.same,
+      agreed: crosscheck.agreed,
+      moduleOnly: crosscheck.moduleOnly.map(({ file, line, name, sealedOnly }) => ({ file, line, name, reported: sealedOnly })),
+      differing: crosscheck.differing.length,
+    },
     effect: { tag: EFFECT.tag, lifted: readResult("effect-lifted"), unlifted: readResult("effect-unlifted"), bench: readResult("bench") },
   };
   fs.mkdirSync(path.dirname(siteData), { recursive: true });
@@ -737,6 +863,7 @@ function runReport() {
   for (const library of libraries) {
     console.log(`  ${library.name}: ${library.candidates} candidates, ${library.hermetic} hermetic, ${library.direct + library.shared} lifted, ${library.skipped} skipped`);
   }
+  console.log(`  Crosscheck: ${crosscheck.functions} functions, ${crosscheck.moduleOnly.length} differing only where sealed sees the module, ${crosscheck.differing.length} differing otherwise`);
   const runs = { lifted: "effect", unlifted: "effect --unlift", bench: "bench" };
   for (const [key, command] of Object.entries(runs)) {
     const result = data.effect[key];
@@ -753,6 +880,7 @@ if (command === "census" || command === "all") runCensus();
 if (command === "stress" || command === "all") runStress();
 if (command === "fix" || command === "all") runFix();
 if (command === "roundtrip" || command === "all") runRoundtrip();
+if (command === "crosscheck" || command === "all") runCrosscheck();
 if (command === "effect") runEffect({ unlift: process.argv.includes("--unlift") });
 if (command === "bench") runBench();
 if (command === "records") runRecords();

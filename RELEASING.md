@@ -2,7 +2,7 @@
 
 This repository publishes two packages to npm, always together and at the same version:
 
-- [`@bombadil/hermetic`](packages/hermetic): `check`, `confine` and the default allowed globals.
+- [`@bombadil/hermetic`](packages/hermetic): `check`, `confine` and `intrinsics`.
 - [`@bombadil/eslint-plugin-hermetic`](packages/eslint-plugin-hermetic): the ESLint rules. It depends on exactly the same version of `@bombadil/hermetic`.
 
 The [Release workflow](.github/workflows/release.yml) publishes them when a GitHub release is published. It uses npm's [trusted publishing](https://docs.npmjs.com/trusted-publishers): npm accepts the workflow's OpenID Connect token instead of a stored secret, so no npm token lives in the repository or its settings, and each version carries a provenance attestation that links it to the run that built it.

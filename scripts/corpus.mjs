@@ -35,7 +35,6 @@ import { planLift, tryLift } from "../packages/eslint-plugin-hermetic/src/lift.t
 import { unlift } from "../packages/eslint-plugin-hermetic/src/unlift.ts";
 import { functionName, isFunctionNode, isMarkedHermetic } from "../packages/eslint-plugin-hermetic/src/marking.ts";
 import { isCandidate } from "../packages/eslint-plugin-hermetic/src/rules/prefer-hermetic.ts";
-import { sealed } from "../packages/eslint-plugin-hermetic/src/rules/sealed.ts";
 import { check } from "@bombadil/hermetic";
 
 const PACKAGES = {
@@ -147,12 +146,11 @@ function runCensus() {
   row("left for a person: this, JSX, hoisted declarations that read imports...", candidates - already - liftable);
 }
 
-/** Analyzes every function as if marked, under three configurations. Nothing may throw. */
+/** Analyzes every function as if marked, under both settings of `types`. Nothing may throw. */
 function runStress() {
   const configurations = {
     default: {},
-    strict: { types: "structural-only", aliasing: "forbid" },
-    bootstrap: { ground: fileURLToPath(new URL("../packages/eslint-plugin-hermetic/tests/fixtures/grounds/clock.ground.ts", import.meta.url)), aliasing: "forbid" },
+    strict: { types: "structural-only" },
   };
   for (const [label, options] of Object.entries(configurations)) {
     const crashes = [];
@@ -161,7 +159,7 @@ function runStress() {
         everything: {
           meta: { schema: [], messages: { problem: "problem" } },
           create(context) {
-            const env = createEnvironment(context, options, sealed);
+            const env = createEnvironment(context, options);
             return {
               ":function"(node) {
                 try {
@@ -192,11 +190,11 @@ const CONSTRUCTS = { lexicalThis: "this", superReference: "super", lexicalNewTar
  * it were marked, and with check() on the text Function.prototype.toString
  * gives for it. Both must report the same problems at the same places, except
  * where sealed sees the module around the function and check() by design
- * cannot: a global the module shadows, or a function declaration whose own
- * name the module reassigns.
+ * cannot: a function declaration whose own name the module reassigns. Neither
+ * can mark a method or a class, so check() must refuse every one.
  */
 function runCrosscheck() {
-  const tally = { files: 0, functions: 0, methods: 0, constructors: 0, hermetic: 0, same: 0, agreed: {}, classes: 0, hermeticClasses: 0 };
+  const tally = { files: 0, functions: 0, methods: 0, constructors: 0, hermetic: 0, same: 0, agreed: {}, classes: 0 };
   const moduleOnly = [];
   const differing = [];
   const oracle = {
@@ -204,16 +202,17 @@ function runCrosscheck() {
       compare: {
         meta: { schema: [], messages: { x: "x" } },
         create(context) {
-          const env = createEnvironment(context, {}, sealed);
+          const env = createEnvironment(context, {});
           const text = context.sourceCode.text;
           const file = path.relative(path.join(root, "published"), context.filename).split(path.sep).join("/");
           return {
-            // sealed has no verdict on a whole class, but check() must read every one as a class.
+            // A class can't be hermetic yet, and check() must read every one as a class and refuse it.
             "ClassDeclaration, ClassExpression"(node) {
               tally.classes++;
               const result = check(text.slice(node.range[0], node.range[1]));
-              if (result.hermetic) tally.hermeticClasses++;
-              if (result.form !== "class") differing.push({ file, line: node.loc.start.line, name: node.id?.name, class: true, problems: result.problems });
+              if (result.form !== "class" || result.problems.length !== 1 || result.problems[0].kind !== "method") {
+                differing.push({ file, line: node.loc.start.line, name: node.id?.name, class: true, problems: result.problems });
+              }
             },
             ":function"(node) {
               const parent = node.parent;
@@ -226,6 +225,12 @@ function runCrosscheck() {
               // A static method's source starts after `static`.
               if (parent.type === "MethodDefinition" && parent.static) start += /^static\b\s*/.exec(text.slice(start, end))[0].length;
               const source = text.slice(start, end);
+              // Neither can mark a method: sealed reports a marked one, and check() refuses its source.
+              if (method) {
+                const refused = check(source).problems;
+                if (refused.length === 1 && refused[0].kind === "method") return void (tally.agreed.method = (tally.agreed.method ?? 0) + 1);
+                return void differing.push({ file, line: node.loc.start.line, name: functionName(node), checkOnly: refused.map((p) => `${p.kind}:${p.name}`), source });
+              }
               const at = (node, from = start) => `@${node.range[0] - from}-${node.range[1] - from}`;
               const expected = analyze(node, functionName(node), env).map((problem) => ({
                 kind: problem.messageId,
@@ -247,10 +252,9 @@ function runCrosscheck() {
                 return;
               }
               const record = { file, line: node.loc.start.line, name: functionName(node), sealedOnly: extra, checkOnly: missing, source: source.length > 400 ? `${source.slice(0, 400)}...` : source };
-              // Problems only the module can show: a shadowed global, and a declaration's own name read as a free variable because the module reassigns it.
+              // A problem only the module can show: a declaration's own name read as a free variable, because the module reassigns it.
               const seesModule = (problem) =>
-                problem.kind === "shadowedGround" ||
-                (problem.kind === "freeVariable" && node.type === "FunctionDeclaration" && problem.reference.resolved?.defs.some((def) => def.node === node));
+                problem.kind === "freeVariable" && node.type === "FunctionDeclaration" && problem.reference.resolved?.defs.some((def) => def.node === node);
               const explained = new Set(expected.filter(seesModule).map((problem) => problem.key));
               if (missing.length === 0 && extra.every((key) => explained.has(key))) moduleOnly.push(record);
               else differing.push(record);
@@ -280,10 +284,10 @@ function runCrosscheck() {
   console.log(`\nCrosscheck: ${tally.functions} functions, ${tally.methods} of them methods, in ${tally.files} files of published JavaScript, in ${seconds}s`);
   row("hermetic, by both", tally.hermetic);
   row("the same problems at the same places", tally.same);
-  row("differ only where sealed sees the module: a shadowed global, a reassigned declaration", moduleOnly.length);
+  row("differ only where sealed sees the module: a declaration whose own name the module reassigns", moduleOnly.length);
   row("differ otherwise", differing.length);
   console.log(`  (and ${tally.constructors} class constructors, whose source is their whole class)`);
-  console.log(`  Classes, checked whole: ${tally.classes}, all read as classes unless listed below; ${tally.hermeticClasses} hermetic`);
+  console.log(`  Classes, each refused as a class unless listed below: ${tally.classes}`);
   console.log(`  Problems both found: ${Object.entries(tally.agreed).sort((a, b) => b[1] - a[1]).map(([kind, n]) => `${n} ${kind}`).join(", ")}`);
   for (const record of differing.slice(0, 10)) console.log(`\n  ${record.file}:${record.line} ${record.name ?? ""}\n    sealed only: ${record.sealedOnly?.join(", ") || "-"}\n    check only:  ${record.checkOnly?.join(", ") || record.fatal || "-"}`);
   fs.mkdirSync(resultsDir, { recursive: true });
@@ -699,7 +703,7 @@ function censusRecords() {
       records: {
         meta: { schema: [], messages: { x: "x" } },
         create(context) {
-          const env = createEnvironment(context, {}, sealed);
+          const env = createEnvironment(context, {});
           const file = path.relative(original, context.filename).split(path.sep).join("/");
           return {
             ":function"(node) {

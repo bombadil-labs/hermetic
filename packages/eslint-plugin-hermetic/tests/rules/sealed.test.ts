@@ -6,9 +6,8 @@ const ruleTester = new RuleTester();
 type ErrorSpec = { messageId: MessageIds; data?: Record<string, string>; line?: number; column?: number; endColumn?: number };
 
 const free = (name: string, fn = "f"): ErrorSpec => ({ messageId: "freeVariable", data: { name, fn } });
-const denied = (path: string, fn = "f"): ErrorSpec => ({ messageId: "deniedPath", data: { path, fn } });
-const aliased = (path: string, fn = "f"): ErrorSpec => ({ messageId: "aliasedGround", data: { path, fn } });
 const escape = (messageId: MessageIds, fn = "f"): ErrorSpec => ({ messageId, data: { fn } });
+const method = (fn: string): ErrorSpec => ({ messageId: "method", data: { fn } });
 
 ruleTester.run("spec: valid cases", sealed, {
   valid: [
@@ -18,7 +17,8 @@ ruleTester.run("spec: valid cases", sealed, {
       name: "inner closure over locals",
       code: `function f(xs) { "use hermetic"; const k = 2; return xs.map(x => x * k); }`,
     },
-    { name: "ground name", code: `function f(a, b) { "use hermetic"; return Math.max(a, b); }` },
+    { name: "a global passed in through this", code: `function f(a, b) { "use hermetic"; return this.Math.max(a, b); }` },
+    { name: "undefined, NaN and Infinity", code: `function f(a) { "use hermetic"; return a === undefined ? NaN : Infinity; }` },
     { name: "calling a passed callback", code: `function f(cb) { "use hermetic"; return cb(1); }` },
     {
       name: "type-only import (default)",
@@ -52,15 +52,15 @@ ruleTester.run("spec: valid cases", sealed, {
       errors: [free("DEFAULT")],
     },
     {
-      name: "denied path",
+      name: "a global",
       code: `function f() { "use hermetic"; return Math.random(); }`,
-      errors: [{ ...denied("Math.random"), line: 1, column: 39, endColumn: 50 }],
+      errors: [{ ...free("Math"), line: 1, column: 39, endColumn: 43 }],
     },
     { name: "clock", code: `function f() { "use hermetic"; return Date.now(); }`, errors: [free("Date")] },
     {
-      name: "super",
+      name: "a method",
       code: `class A extends B { method() { "use hermetic"; return super.method(); } }`,
-      errors: [escape("superReference", "method")],
+      errors: [method("method")],
     },
     {
       name: "import.meta",
@@ -129,7 +129,7 @@ ruleTester.run("marking", sealed, {
     {
       name: "object method",
       code: `const R = 1; const o = { m() { "use hermetic"; return R; } };`,
-      errors: [free("R", "m")],
+      errors: [method("m")],
     },
     {
       name: "JSDoc on an object property",
@@ -139,22 +139,22 @@ ruleTester.run("marking", sealed, {
     {
       name: "class method",
       code: `const R = 1; class C { m() { "use hermetic"; return R; } }`,
-      errors: [free("R", "m")],
+      errors: [method("m")],
     },
     {
       name: "JSDoc on a class field arrow",
       code: `const R = 1; class C { /** @hermetic */ m = () => R; }`,
-      errors: [free("R", "m")],
+      errors: [method("m")],
     },
     {
       name: "getter",
       code: `const R = 1; class C { get v() { "use hermetic"; return R; } }`,
-      errors: [free("R", "v")],
+      errors: [method("v")],
     },
     {
       name: "private method",
       code: `const R = 1; class C { #m() { "use hermetic"; return R; } }`,
-      errors: [free("R", "#m")],
+      errors: [method("#m")],
     },
     {
       name: "anonymous default export",
@@ -183,7 +183,6 @@ ruleTester.run("free variables", sealed, {
       name: "a nested function's own this",
       code: `const f = () => { "use hermetic"; return function () { return this; }; };`,
     },
-    { name: "this in a hermetic method", code: `const o = { m() { "use hermetic"; return this.x; } };` },
     { name: "own new.target", code: `function F() { "use hermetic"; return new.target; }` },
     {
       name: "super within a class declared inside",
@@ -212,8 +211,12 @@ ruleTester.run("free variables", sealed, {
     },
     { name: "labels", code: `function f() { "use hermetic"; outer: for (;;) { break outer; } }` },
     {
-      name: "default ground names",
-      code: `function f(s) { "use hermetic"; const m = new Map([[1, new Set()]]); return [JSON.parse(s) ?? undefined ?? NaN, Promise.resolve(m), new TypeError("x"), Number.isFinite(Infinity)]; }`,
+      name: "undefined, NaN and Infinity read like keywords",
+      code: `function f(x) { "use hermetic"; return [x ?? undefined, NaN, Infinity, typeof undefined]; }`,
+    },
+    {
+      name: "globals passed in",
+      code: `function f({ JSON, Map }, s) { "use hermetic"; return new Map([[1, this.Number.isFinite(JSON.parse(s))]]); }`,
     },
     {
       // Known limit, documented in the README: being hermetic is not confinement.
@@ -238,9 +241,9 @@ ruleTester.run("free variables", sealed, {
       errors: [free("f")],
     },
     {
-      name: "a class referring to itself from a method",
-      code: `class A { m() { "use hermetic"; return new A(); } }`,
-      errors: [free("A", "m")],
+      name: "every global, including the built-ins every realm has",
+      code: `function f(s) { "use hermetic"; const m = new Map([[1, new Set()]]); return [JSON.parse(s), Promise.resolve(m), new TypeError("x"), Number.isFinite(1), Math.max, Array, Object, Symbol]; }`,
+      errors: ["Map", "Set", "JSON", "Promise", "TypeError", "Number", "Math", "Array", "Object", "Symbol"].map((name) => free(name)),
     },
     {
       name: "an escape from a nested closure is reported once",
@@ -253,19 +256,24 @@ ruleTester.run("free variables", sealed, {
       errors: [free("leaked")],
     },
     {
-      name: "a local binding that shadows a ground name",
+      name: "a module binding named like a global",
       code: `const Math = { max: () => 0 }; function f(a, b) { "use hermetic"; return Math.max(a, b); }`,
-      errors: [{ messageId: "shadowedGround", data: { name: "Math", fn: "f" } }],
+      errors: [free("Math")],
     },
     {
-      name: "an import that shadows a ground name",
+      name: "an import named like a global",
       code: `import { JSON } from "./json"; function f(s) { "use hermetic"; return JSON.parse(s); }`,
-      errors: [{ messageId: "shadowedGround", data: { name: "JSON", fn: "f" } }],
+      errors: [free("JSON")],
     },
     {
-      name: "assigning to a ground name",
+      name: "an import named like one of the three immutable globals",
+      code: `import { Infinity } from "./numbers"; function f() { "use hermetic"; return Infinity; }`,
+      errors: [free("Infinity")],
+    },
+    {
+      name: "assigning to a global",
       code: `function f() { "use hermetic"; Math = null; }`,
-      errors: [{ messageId: "groundWrite", data: { name: "Math", fn: "f" } }],
+      errors: [free("Math")],
     },
     {
       name: "ambient authority",
@@ -331,9 +339,9 @@ ruleTester.run("syntactic escapes", sealed, {
       errors: [escape("lexicalThis")],
     },
     {
-      name: "this in a hermetic class field arrow",
+      name: "a hermetic class field arrow",
       code: `class C { f = () => { "use hermetic"; return this.x; }; }`,
-      errors: [escape("lexicalThis")],
+      errors: [method("f")],
     },
     {
       name: "this in a computed key of a class declared inside a hermetic arrow",
@@ -346,9 +354,9 @@ ruleTester.run("syntactic escapes", sealed, {
       errors: [escape("lexicalNewTarget", "g")],
     },
     {
-      name: "super in an arrow inside a hermetic method",
+      name: "a hermetic method, even with super only in an arrow inside it",
       code: `class A extends B { m() { "use hermetic"; return () => super.m(); } }`,
-      errors: [escape("superReference", "m")],
+      errors: [method("m")],
     },
     {
       name: "super in a hermetic arrow inside a method",
@@ -356,14 +364,19 @@ ruleTester.run("syntactic escapes", sealed, {
       errors: [escape("superReference", "g")],
     },
     {
-      name: "super() in a hermetic constructor",
+      name: "a hermetic constructor",
       code: `class A extends B { constructor() { "use hermetic"; super(); } }`,
-      errors: [escape("superReference", "constructor")],
+      errors: [method("constructor")],
     },
     {
-      name: "super in a hermetic object method",
+      name: "a hermetic object method",
       code: `const o = { m() { "use hermetic"; return super.toString(); } };`,
-      errors: [escape("superReference", "m")],
+      errors: [method("m")],
+    },
+    {
+      name: "a hermetic function stored in an object property is a function",
+      code: `const o = { m: function () { "use hermetic"; return this.x + R; } };`,
+      errors: [free("R", "m")],
     },
     {
       name: "import.meta in a nested function",
@@ -392,105 +405,6 @@ ruleTester.run("syntactic escapes", sealed, {
   ],
 });
 
-ruleTester.run("denied paths", sealed, {
-  valid: [
-    { name: "other members of a partly denied object", code: `function f(x) { "use hermetic"; return Math.floor(x) * Math.PI; }` },
-    { name: "a computed literal key", code: `function f(x) { "use hermetic"; return Math["floor"](x); }` },
-    { name: "destructuring allowed members", code: `function f(x) { "use hermetic"; const { max, floor } = Math; return max(floor(x), 0); }` },
-    {
-      name: "best-effort: an alias hides the path",
-      code: `function f() { "use hermetic"; const m = Math; return m.random(); }`,
-    },
-    { name: "best-effort: a dynamic key hides the path", code: `function f(k) { "use hermetic"; return Math[k](); }` },
-    { name: "best-effort: a rest element", code: `function f() { "use hermetic"; const { ...rest } = Math; return rest; }` },
-  ],
-  invalid: [
-    { name: "string key", code: `function f() { "use hermetic"; return Math["random"](); }`, errors: [denied("Math.random")] },
-    { name: "template key", code: "function f() { \"use hermetic\"; return Math[`random`](); }", errors: [denied("Math.random")] },
-    { name: "optional chaining", code: `function f() { "use hermetic"; return Math?.random(); }`, errors: [denied("Math.random")] },
-    {
-      name: "type assertion and non-null wrappers",
-      code: `function f() { "use hermetic"; return [(Math as any).random(), Math!.random(), (<any>Math).random()]; }`,
-      errors: [denied("Math.random"), denied("Math.random"), denied("Math.random")],
-    },
-    {
-      name: "a longer chain reports the denied prefix",
-      code: `function f() { "use hermetic"; return Math.random.call(null); }`,
-      errors: [{ ...denied("Math.random"), column: 39, endColumn: 50 }],
-    },
-    {
-      name: "typeof still reads the member",
-      code: `function f() { "use hermetic"; return typeof Math.random; }`,
-      errors: [denied("Math.random")],
-    },
-    {
-      name: "destructuring",
-      code: `function f() { "use hermetic"; const { random } = Math; return random(); }`,
-      errors: [denied("Math.random")],
-    },
-    {
-      name: "destructuring with rename and default",
-      code: `function f() { "use hermetic"; const { random: r = () => 0 } = Math; return r(); }`,
-      errors: [denied("Math.random")],
-    },
-    {
-      name: "destructuring assignment",
-      code: `function f() { "use hermetic"; let random; ({ random } = Math); return random; }`,
-      errors: [denied("Math.random")],
-    },
-    {
-      name: "destructuring a parameter default",
-      code: `function f({ random } = Math) { "use hermetic"; return random(); }`,
-      errors: [denied("Math.random")],
-    },
-  ],
-});
-
-ruleTester.run("aliasing: forbid", sealed, {
-  valid: [
-    { name: "static member access", code: `function f(a, b) { "use hermetic"; return Math.max(a, b); }`, options: [{ aliasing: "forbid" }] },
-    { name: "static destructuring", code: `function f(a) { "use hermetic"; const { abs } = Math; return abs(a); }`, options: [{ aliasing: "forbid" }] },
-    { name: "typeof", code: `function f() { "use hermetic"; return typeof Math; }`, options: [{ aliasing: "forbid" }] },
-    {
-      name: "fully allowed ground objects may be aliased",
-      code: `function f() { "use hermetic"; const j = JSON; return j; }`,
-      options: [{ aliasing: "forbid" }],
-    },
-  ],
-  invalid: [
-    {
-      name: "an alias",
-      code: `function f() { "use hermetic"; const m = Math; return m.random(); }`,
-      options: [{ aliasing: "forbid" }],
-      errors: [aliased("Math")],
-    },
-    {
-      name: "a dynamic key",
-      code: `function f(k) { "use hermetic"; return Math[k](); }`,
-      options: [{ aliasing: "forbid" }],
-      errors: [aliased("Math")],
-    },
-    {
-      name: "passing the object along",
-      code: `function f(g) { "use hermetic"; return g(Math); }`,
-      options: [{ aliasing: "forbid" }],
-      errors: [aliased("Math")],
-    },
-    {
-      name: "a rest element",
-      code: `function f() { "use hermetic"; const { max, ...rest } = Math; return rest; }`,
-      options: [{ aliasing: "forbid" }],
-      errors: [aliased("Math")],
-    },
-    {
-      name: "a computed destructuring key",
-      code: `function f(k) { "use hermetic"; const { [k]: v } = Math; return v; }`,
-      options: [{ aliasing: "forbid" }],
-      errors: [aliased("Math")],
-    },
-  ],
-});
-
 ruleTester.run("types", sealed, {
   valid: [
     {
@@ -498,8 +412,8 @@ ruleTester.run("types", sealed, {
       code: `const RATE = 1; function f(a: typeof RATE): typeof RATE { "use hermetic"; return a; }`,
     },
     {
-      name: "the spec's bootstrap signature",
-      code: `export function ground(realm: typeof globalThis) { "use hermetic"; return { allow: { Math: realm.Math }, deny: ["Math.random"] }; }`,
+      name: "a function that picks values out of a realm",
+      code: `export function environment(realm: typeof globalThis) { "use hermetic"; return { Math: realm.Math, JSON: realm.JSON }; }`,
     },
     {
       name: "a named this type",
@@ -554,8 +468,8 @@ ruleTester.run("types", sealed, {
       errors: [{ messageId: "typeReference", data: { name: "RATE", fn: "f" } }],
     },
     {
-      name: "structural-only: an enclosing class's type parameter",
-      code: `class Box<T> { map(g: (x: T) => T) { "use hermetic"; return g; } }`,
+      name: "structural-only: an enclosing function's type parameter",
+      code: `function box<T>() { function map(g: (x: T) => T) { "use hermetic"; return g; } return map; }`,
       options: [{ types: "structural-only" }],
       errors: [
         { messageId: "typeReference", data: { name: "T", fn: "map" } },

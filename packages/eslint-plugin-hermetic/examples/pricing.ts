@@ -1,7 +1,8 @@
 /**
- * The pricing example: business logic in hermetic functions, with their
- * dependencies supplied by binding `this`.
+ * The pricing example: business logic in hermetic functions, with everything
+ * they use supplied by binding `this`, the built-ins they call included.
  */
+import { type Intrinsics, intrinsics } from "@bombadil/hermetic";
 
 export interface Invoice {
   readonly id: string;
@@ -19,10 +20,10 @@ export function applyDiscount(this: PricingCtx, invoice: Invoice): Invoice {
   return { ...invoice, total: this.clamp(invoice.total * (1 - this.rate)) };
 }
 
-/** Rounds to whole cents. */
-export function clampToCents(n: number): number {
+/** Rounds to whole cents. `Math` comes in through `this`, like anything else. */
+export function clampToCents(this: Pick<Intrinsics, "Math">, n: number): number {
   "use hermetic";
-  return Math.round(n * 100) / 100;
+  return this.Math.round(n * 100) / 100;
 }
 
 /** Totals invoices. Hermeticity is not transitive, so pricing arrives through `this`. */
@@ -32,11 +33,14 @@ export function checkout(this: { price: (invoice: Invoice) => Invoice }, invoice
 }
 
 // Supplying dependencies: ordinary code that builds `this` objects and binds
-// them. Hermetic functions compose by passing bound ones into other `this`
-// objects.
+// them. Only the root environment reads the realm; everything else is built
+// from it, and frozen, so no function can change what another one gets.
 
-export function bindPricing(config: { readonly discountRate: number }) {
-  const pricing: PricingCtx = { rate: config.discountRate, clamp: clampToCents };
-  const price = applyDiscount.bind(pricing); // (invoice: Invoice) => Invoice
-  return { price, checkout: checkout.bind({ price }) };
+/** The built-ins these bindings draw from. */
+const root = intrinsics(globalThis);
+
+export function bindPricing(config: { readonly discountRate: number }, env: Pick<Intrinsics, "Math"> = root) {
+  const clamp = clampToCents.bind(env);
+  const price = applyDiscount.bind(Object.freeze({ rate: config.discountRate, clamp })); // (invoice: Invoice) => Invoice
+  return { price, checkout: checkout.bind(Object.freeze({ price })) };
 }

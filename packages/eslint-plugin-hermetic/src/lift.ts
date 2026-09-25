@@ -7,7 +7,7 @@ type Reference = TSESLint.Scope.Reference;
 type SourceCode = Readonly<TSESLint.SourceCode>;
 
 /** Problems a lift can resolve: references to module bindings and globals. */
-const LIFTABLE: ReadonlySet<MessageIds> = new Set(["freeVariable", "shadowedGround", "deniedPath", "aliasedGround"]);
+const LIFTABLE: ReadonlySet<MessageIds> = new Set(["freeVariable"]);
 
 /** A binding the lift moves into the function's context. */
 interface Lifted {
@@ -51,7 +51,7 @@ export interface LiftPlan {
 /** Why a function was not lifted: the first check it failed. */
 export type LiftBlocker =
   | "structural-only types"
-  | "a method or object member"
+  | "an object member"
   | "not declared at module level"
   | "a named function expression"
   | "a typed variable"
@@ -68,7 +68,6 @@ export type LiftBlocker =
   | "lexical this or new.target"
   | "super"
   | "import.meta or import()"
-  | "writes a ground name"
   | "writes a constant or import"
   | "a lifted name inside a nested function or class"
   | "a const enum"
@@ -171,7 +170,7 @@ function liftSite(fn: FunctionNode): LiftSite | LiftBlocker {
     parent.type === AST_NODE_TYPES.MethodDefinition ||
     parent.type === AST_NODE_TYPES.PropertyDefinition
   ) {
-    return "a method or object member";
+    return "an object member";
   }
   if (fn.params.some((param) => param.type === AST_NODE_TYPES.Identifier && param.name === "this")) return "a this parameter or asserts";
   const returns = fn.returnType?.typeAnnotation;
@@ -212,7 +211,6 @@ const PROBLEM_BLOCKERS: Partial<Record<MessageIds, LiftBlocker>> = {
   superReference: "super",
   importMeta: "import.meta or import()",
   dynamicImport: "import.meta or import()",
-  groundWrite: "writes a ground name",
 };
 
 /** `@ts-expect-error` and `@ts-ignore` target lines that move; the author should decide. */

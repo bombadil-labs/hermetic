@@ -4,7 +4,7 @@
 import "ses";
 import { parse } from "acorn";
 import { beforeAll, describe, expect, it } from "vitest";
-import { type CheckContext, checkHermetic, confine, DEFAULT_GROUND, type GroundBootstrap, HermeticError } from "../src/index.ts";
+import { type CheckContext, checkHermetic, confine, HermeticError, intrinsics } from "../src/index.ts";
 
 function thrown(run: () => unknown): HermeticError {
   try {
@@ -40,28 +40,23 @@ describe("after lockdown()", () => {
     expect(area.call({ w: 2, h: 3 })).toBe(6);
   });
 
-  it("confines methods and accessors", () => {
-    const area = confine<(this: { w: number; h: number }) => number>("area() { return this.w * this.h }");
-    const size = confine<(this: { items: unknown[] }) => number>("get size() { return this.items.length }");
-    const iterate = confine("[Symbol.iterator]() { return [][Symbol.iterator]() }");
-    expect(area.call({ w: 2, h: 3 })).toBe(6);
-    expect(size.call({ items: [1, 2] })).toBe(2);
-    expect(iterate.name).toBe("[Symbol.iterator]");
+  it("gets the built-ins it needs through this, from intrinsics", () => {
+    const round = confine<(this: { Math: Omit<Math, "random"> }, n: number) => number>(
+      'function (n) { "use hermetic"; return this.Math.round(n) }',
+    );
+    expect(round.call(harden(intrinsics(globalThis)), 2.6)).toBe(3);
   });
 
-  it("confines classes, and hardens their prototypes", () => {
-    const Point = confine<new (x: number, y: number) => { norm(): number }>(
-      "class Point { constructor(x, y) { this.x = x; this.y = y } norm() { return Math.hypot(this.x, this.y) } }",
-    );
-    expect(new Point(3, 4).norm()).toBe(5);
-    expect(() => Object.assign(Point.prototype, { norm: () => 0 })).toThrow(TypeError);
+  it("doesn't reach the compartment's global object through this", () => {
+    expect(confine(function (this: unknown) {
+      return this;
+    })()).toBeUndefined();
   });
 
   it("confines the checker itself, which gets nothing but the parser it is handed", () => {
     const confined = confine(checkHermetic);
     const context: CheckContext = {
       parse: (source, sourceType) => parse(source, { ecmaVersion: "latest", sourceType, checkPrivateFields: false }),
-      ground: DEFAULT_GROUND,
     };
     expect(confined.call(context, "(a) => a + b")).toMatchObject({
       hermetic: false,
@@ -70,10 +65,17 @@ describe("after lockdown()", () => {
   });
 
   it("refuses a function that isn't hermetic, and says why", () => {
-    const error = thrown(() => confine("(a) => a + b + Math.random()"));
-    expect(error.message).toBe("Not hermetic: 'b' is a free variable (at 11); 'Math.random' is not allowed (at 15).");
-    expect(error.problems.map((problem) => problem.kind)).toEqual(["freeVariable", "deniedPath"]);
-    expect(error.source).toBe("(a) => a + b + Math.random()");
+    const error = thrown(() => confine("(a) => a + b + Math.max(a)"));
+    expect(error.message).toBe("Not hermetic: 'b' is a free variable (at 11); 'Math' is a free variable (at 15).");
+    expect(error.problems.map((problem) => problem.kind)).toEqual(["freeVariable", "freeVariable"]);
+    expect(error.source).toBe("(a) => a + b + Math.max(a)");
+  });
+
+  it("refuses methods and classes, which can't be hermetic yet", () => {
+    expect(thrown(() => confine("area() { return this.w * this.h }")).message).toBe(
+      "Not hermetic: it is a method, which can't be hermetic yet (at 0).",
+    );
+    expect(thrown(() => confine("class Point {}")).problems).toMatchObject([{ kind: "method", name: "class" }]);
   });
 
   it("refuses a bound function, whose source isn't available", () => {
@@ -82,10 +84,10 @@ describe("after lockdown()", () => {
   });
 
   describe("stops what reading names can't show", () => {
-    // Each of these reads nothing but its inputs by name, so check passes it.
-    it("a write to the built-ins every object shares", () => {
+    // Each of these names nothing outside itself, so check passes it.
+    it("a write to the built-ins every object shares, as in ({}).__proto__", () => {
       const pollute = confine(() => {
-        Object.getPrototypeOf({}).hasOwnProperty = () => true;
+        ({} as { __proto__: { hasOwnProperty: unknown } }).__proto__.hasOwnProperty = () => true;
       });
       expect(pollute).toThrow(TypeError);
       expect(Object.prototype.hasOwnProperty.call({}, "x")).toBe(false);
@@ -95,67 +97,13 @@ describe("after lockdown()", () => {
       const escape = confine(() => [].constructor.constructor("return globalThis")());
       expect(escape).toThrow(TypeError);
     });
-
-    it("a denied member, reached through an alias", () => {
-      const random = confine(() => {
-        const m = Math;
-        return m.random();
-      });
-      expect(random).toThrow("secure mode");
-    });
   });
 
-  it("leaves the compartment only the allowed globals", () => {
-    // A method's computed key runs once, inside the compartment, when it is confined.
-    expect(confine("[typeof Date]() {}").name).toBe("undefined");
-    expect(confine("[typeof globalThis]() {}").name).toBe("undefined");
-    expect(confine("[typeof Math]() {}").name).toBe("object");
-  });
-
-  it("freezes the compartment's global object, so nothing can be kept there", () => {
-    // Evaluated code sees the compartment's global object as its top-level this.
-    const error = thrown(() => confine("[(this.kept = 1, 'm')]() {}"));
-    expect(error.message).toBe("The compartment could not evaluate it: Cannot add property kept, object is not extensible");
-    expect(error.cause).toBeInstanceOf(TypeError);
-  });
-
-  describe("with a ground bootstrap", () => {
-    const ground: GroundBootstrap = (realm) => ({
-      allow: { Math: realm.Math, Date: realm.Date },
-      deny: ["Math.random", "Date.now"],
-    });
-
-    it("allows the globals it picks, from the compartment", () => {
-      expect(confine(() => new Date(0).getTime(), { ground })()).toBe(0);
-      expect(thrown(() => confine(() => JSON.stringify(1), { ground })).message).toBe(
-        "Not hermetic: 'JSON' is a free variable (at 6).",
-      );
-    });
-
-    it("denies what it denies, by name and through an alias", () => {
-      expect(thrown(() => confine(() => Date.now(), { ground })).problems).toMatchObject([{ kind: "deniedPath" }]);
-      const clock = confine(
-        () => {
-          const D = Date;
-          return D.now();
-        },
-        { ground },
-      );
-      expect(clock).toThrow("secure mode");
-    });
-
-    it("hardens the values it adds", () => {
-      const rates = { tax: 2 };
-      const withRates: GroundBootstrap = () => ({ allow: { rates } });
-      const tax = confine<(n: number) => number>("(n) => n * rates.tax", { ground: withRates });
-      expect(tax(3)).toBe(6);
-      expect(Object.isFrozen(rates)).toBe(true);
-    });
-
-    it("removes a name denied whole", () => {
-      const noMath: GroundBootstrap = (realm) => ({ allow: { Math: realm.Math }, deny: ["Math"] });
-      expect(confine("[typeof Math]() {}", { ground: noMath }).name).toBe("undefined");
-    });
+  it("leaves a member out when the binding leaves it out", () => {
+    const random = confine<(this: { Math: Omit<Math, "random"> }) => number>(
+      'function () { "use hermetic"; return this.Math.random() }',
+    );
+    expect(() => random.call(intrinsics(globalThis))).toThrow(TypeError);
   });
 
   describe("reports source the compartment refuses", () => {
@@ -165,10 +113,9 @@ describe("after lockdown()", () => {
       expect(error.problems).toEqual([]);
     });
 
-    it("a method that uses its class's private names", () => {
-      const error = thrown(() => confine("total() { return this.#items.length }"));
-      expect(error.message).toBe(
-        "The compartment could not evaluate it: Private field '#items' must be declared in an enclosing class",
+    it("a function that only works in sloppy mode", () => {
+      expect(thrown(() => confine("function () { return 010 }")).message).toBe(
+        "The compartment could not evaluate it: Octal literals are not allowed in strict mode.",
       );
     });
   });

@@ -17,17 +17,17 @@ Both make a function's dependencies explicit, in different ways. This case study
 
 In Effect, a program is a value of type `Effect<A, E, R>`: `A` is the result, `E` is the error, and `R` lists the services the program needs. Code asks for a service with `yield* Database`, the type checker adds `Database` to `R`, and the program can only run once every service in `R` has been provided, usually by a `Layer`. Effect also handles concurrency, retries, resources, streams and schemas.
 
-Hermetic is a lint rule for plain functions. It checks that a function reads nothing but its inputs, meaning its arguments including `this`, and a short list of allowed globals. It has no runtime and adds no types.
+Hermetic is a lint rule for plain functions. It checks that a function reads nothing but its inputs, meaning its arguments, including `this`: no imports, no module-level variables and no globals, not even built-ins such as `Math`. It has no runtime and adds no types.
 
 | | Effect | hermetic |
 | --- | --- | --- |
 | What it is | A library and runtime for writing programs as values | An ESLint rule for plain functions |
 | How a function gets its dependencies | As services, listed in the `R` type and provided by layers | As inputs, usually by binding `this` |
-| What is checked | Every service the program asks for has been provided | The function reads nothing but its inputs and the allowed globals |
+| What is checked | Every service the program asks for has been provided | The function reads nothing but its inputs |
 | Reading a global directly | Allowed: `Effect.sync(() => Date.now())` adds nothing to `R` | Reported |
 | Adopting it | Write code in Effect's style | Lint existing code; the `lift` fix rewrites what it can |
 
-The two can be used together. `R` lists the services a program asks for. It doesn't list what the code reads without asking, such as `Date.now()` inside `Effect.sync`, or a module-level database client used inside `Effect.tryPromise`. If the functions in an Effect program are hermetic, everything they depend on appears either in `R` or in their inputs. Effect provides the clock and random numbers as services so that tests can replace them; hermetic leaves `Date` and `Math.random` out of its default allowed globals for the same reason.
+The two can be used together. `R` lists the services a program asks for. It doesn't list what the code reads without asking, such as `Date.now()` inside `Effect.sync`, or a module-level database client used inside `Effect.tryPromise`. If the functions in an Effect program are hermetic, everything they depend on appears either in `R` or in their inputs. Effect provides the clock and random numbers as services so that tests can replace them. A hermetic function gets them as inputs, for the same reason, and `intrinsics`, which picks out the built-ins to pass in, leaves `Date` and `Math.random` out.
 
 There is one gap. Hermetic treats imports as values to pass in, including Effect's own modules, so a hermetic function that builds Effect programs needs `Effect` passed in too. The plugin doesn't yet have a way to allow specific packages.
 

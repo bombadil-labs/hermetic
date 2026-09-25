@@ -3,7 +3,6 @@ import * as tsParser from "@typescript-eslint/parser";
 import { Linter } from "eslint";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { eraseTypes } from "../../src/ground/erase.ts";
 import plugin from "../../src/index.ts";
 import { preferHermetic } from "../../src/rules/prefer-hermetic.ts";
 
@@ -336,8 +335,7 @@ function fix(code: string): { output: string; remaining: Linter.LintMessage[] } 
 
 /** Runs a TypeScript module body in strict mode, as a module would, and returns the named bindings. */
 function run(code: string, names: readonly string[]): Record<string, unknown> {
-  const { ast, visitorKeys } = tsParser.parseForESLint(code, { range: true, loc: true, filePath: "module.ts" });
-  const js = eraseTypes(code, ast, visitorKeys);
+  const js = ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   return new Function(`"use strict";\n${js}\nreturn { ${names.join(", ")} };`)() as Record<string, unknown>;
 }
 

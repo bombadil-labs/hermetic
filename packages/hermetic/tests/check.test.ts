@@ -1,10 +1,10 @@
 import { parse } from "acorn";
 import { describe, expect, it } from "vitest";
-import { check, type CheckContext, checkHermetic, createGround, DEFAULT_GROUND, type GroundConfig } from "../src/index.ts";
+import { check, type CheckContext, checkHermetic, IMMUTABLE_GLOBALS } from "../src/index.ts";
 
 /** Each problem as `kind:name`, in source order. */
-function problems(source: string, ground?: GroundConfig): string[] {
-  return check(source, ground).problems.map((problem) => `${problem.kind}:${problem.name}`);
+function problems(source: string): string[] {
+  return check(source).problems.map((problem) => `${problem.kind}:${problem.name}`);
 }
 
 describe("check: forms", () => {
@@ -20,15 +20,29 @@ describe("check: forms", () => {
   });
 
   it.each([
-    ["a method", "total(items) { return items.length }"],
-    ["a getter", "get size() { return this.items.length }"],
-    ["a setter", "set size(value) { this.items.length = value }"],
-    ["an async generator method", "async *pages(n) { yield n }"],
-    ["a method with a computed key", "[Symbol.iterator]() { return this }"],
-    ["a private method", "#total() { return this.#items.length }"],
-    ["an object literal's method named constructor", "constructor() { return this }"],
-  ])("reads %s as a method", (_label, source) => {
-    expect(check(source)).toEqual({ form: "method", marked: false, hermetic: true, problems: [] });
+    ["a method", "total(items) { return items.length }", "method"],
+    ["a getter", "get size() { return this.items.length }", "accessor"],
+    ["a setter", "set size(value) { this.items.length = value }", "accessor"],
+    ["an async generator method", "async *pages(n) { yield n }", "method"],
+    ["a method with a computed key", "[this.key]() { return this }", "method"],
+    ["a private method", "#total() { return this.#items.length }", "method"],
+    ["an object literal's method named constructor", "constructor() { return this }", "method"],
+  ])("refuses %s, whose this is its object", (_label, source, name) => {
+    expect(check(source)).toEqual({
+      form: "method",
+      marked: false,
+      hermetic: false,
+      problems: [{ kind: "method", name, start: 0, end: source.length }],
+    });
+  });
+
+  it("refuses a class", () => {
+    expect(check("class Shape { area() { return 0 } }")).toEqual({
+      form: "class",
+      marked: false,
+      hermetic: false,
+      problems: [{ kind: "method", name: "class", start: 0, end: 35 }],
+    });
   });
 
   it("takes a function value, through Function.prototype.toString", () => {
@@ -38,7 +52,7 @@ describe("check: forms", () => {
       },
     };
     expect(check((a: number) => a * 2)).toMatchObject({ form: "function", hermetic: true });
-    expect(check(shape.area)).toMatchObject({ form: "method", hermetic: true });
+    expect(check(shape.area)).toMatchObject({ form: "method", hermetic: false });
   });
 
   it.each([
@@ -58,14 +72,6 @@ describe("check: forms", () => {
     });
   });
 
-  it.each([
-    ["an empty class", "class Shape {}"],
-    ["an anonymous class", "class { area() { return 0 } }"],
-    ["a class extending an allowed global", "class NotFound extends Error { constructor(m) { super(m) } }"],
-  ])("reads %s as a class", (_label, source) => {
-    expect(check(source)).toEqual({ form: "class", marked: false, hermetic: true, problems: [] });
-  });
-
   it("reports a syntax error where parsing stopped", () => {
     const source = "function (a { return a }";
     const result = check(source);
@@ -79,7 +85,7 @@ describe("check: forms", () => {
 
   it("closes each wrapper on a new line, so a trailing line comment can't swallow it", () => {
     expect(check("x => x // done")).toMatchObject({ form: "function", hermetic: true });
-    expect(check("m() { return 1 } // done")).toMatchObject({ form: "method", hermetic: true });
+    expect(check("m() { return 1 } // done")).toMatchObject({ form: "method" });
   });
 
   it("falls back to script code for sloppy-mode functions", () => {
@@ -92,7 +98,6 @@ describe("check: marking", () => {
   it("finds the directive at the head of the body", () => {
     expect(check('function (a) { "use hermetic"; return a }').marked).toBe(true);
     expect(check("(a) => { 'use hermetic'; return a }").marked).toBe(true);
-    expect(check('m() { "use hermetic"; return 1 }').marked).toBe(true);
   });
 
   it("finds it among other directives", () => {
@@ -108,14 +113,38 @@ describe("check: marking", () => {
     expect(check('function () { "use hermetic"; return y }')).toMatchObject({ marked: true, hermetic: false });
     expect(check("function () { return 1 }")).toMatchObject({ marked: false, hermetic: true });
   });
+
+  it("finds it in a method it refuses", () => {
+    expect(check('m() { "use hermetic"; return 1 }')).toMatchObject({ marked: true, hermetic: false });
+  });
 });
 
 describe("check: names", () => {
-  it("reports free variables and nothing else", () => {
+  it("reports every name from outside the function, globals included", () => {
     expect(problems("(a) => a + b + Math.max(c, JSON.stringify(d))")).toEqual([
       "freeVariable:b",
+      "freeVariable:Math",
       "freeVariable:c",
+      "freeVariable:JSON",
       "freeVariable:d",
+    ]);
+  });
+
+  it("reads undefined, NaN and Infinity as if they were keywords", () => {
+    expect(problems("(a) => [undefined, NaN, Infinity, typeof undefined, a === undefined]")).toEqual([]);
+    expect([...IMMUTABLE_GLOBALS]).toEqual(["undefined", "NaN", "Infinity"]);
+  });
+
+  it("reads what comes in through this and the arguments", () => {
+    expect(problems("function (n) { return this.Math.max(n, this.limit) }")).toEqual([]);
+    expect(problems("({ Math }, n) => Math.round(n)")).toEqual([]);
+  });
+
+  it("reports writes to globals like reads", () => {
+    expect(problems("() => { Math = 1; [JSON] = []; for (Object of []) ; }")).toEqual([
+      "freeVariable:Math",
+      "freeVariable:JSON",
+      "freeVariable:Object",
     ]);
   });
 
@@ -133,6 +162,8 @@ describe("check: names", () => {
     ["labels", "() => { outer: for (;;) { break outer } }"],
     ["object keys and member names", "(o) => ({ key: o.prop, [o.dynamic]: 1 }).key"],
     ["a var inside a static block", "() => class { static { var hidden = 1; hidden } }"],
+    ["locals named like globals", "() => { let Math = 1; Math++; return Math }"],
+    ["a parameter named undefined", "(undefined) => undefined"],
   ])("resolves %s", (_label, source) => {
     expect(problems(source)).toEqual([]);
   });
@@ -151,71 +182,7 @@ describe("check: names", () => {
   });
 
   it("reports names under typeof, shorthand properties and spreads", () => {
-    expect(problems("() => [typeof a, { b }, ...c]")).toEqual([
-      "freeVariable:a",
-      "freeVariable:b",
-      "freeVariable:c",
-    ]);
-  });
-
-  it("reports a method's own name, which methods don't bind", () => {
-    expect(problems("walk(n) { return n && walk(n - 1) }")).toEqual(["freeVariable:walk"]);
-  });
-
-  it("reports assignments to allowed globals", () => {
-    expect(problems("() => { Math = 1; undefined++; [JSON] = []; for (Object of []) ; }")).toEqual([
-      "groundWrite:Math",
-      "groundWrite:undefined",
-      "groundWrite:JSON",
-      "groundWrite:Object",
-    ]);
-  });
-
-  it("allows writes to locals that shadow allowed globals", () => {
-    expect(problems("() => { let Math = 1; Math++; return Math }")).toEqual([]);
-  });
-});
-
-describe("check: denied members", () => {
-  it.each([
-    ["a call", "() => Math.random()"],
-    ["a string key", '() => Math["random"]()'],
-    ["a template key", "() => Math[`random`]()"],
-    ["an optional chain", "() => Math?.random()"],
-    ["a destructuring declaration", "() => { const { random } = Math; return random() }"],
-    ["a destructuring default parameter", "({ random } = Math) => random()"],
-    ["a destructuring assignment", "() => { let random; ({ random } = Math); return random() }"],
-  ])("reports Math.random through %s", (_label, source) => {
-    expect(problems(source)).toEqual(["deniedPath:Math.random"]);
-  });
-
-  it("reports a read once, at the denied member", () => {
-    const source = "() => Math.random.call(null) + Math.random.name";
-    expect(check(source).problems.map((problem) => source.slice(problem.start, problem.end))).toEqual([
-      "Math.random",
-      "Math.random",
-    ]);
-    expect(problems("() => { const { random: { name } } = Math; return name }")).toEqual(["deniedPath:Math.random"]);
-  });
-
-  it("follows member paths into destructuring", () => {
-    const ground = { allow: { Date }, deny: ["Date.prototype.getTime"] };
-    expect(problems("() => { const { getTime } = Date.prototype; return getTime }", ground)).toEqual([
-      "deniedPath:Date.prototype.getTime",
-    ]);
-    expect(problems("() => { const { prototype: { getTime } } = Date; return getTime }", ground)).toEqual([
-      "deniedPath:Date.prototype.getTime",
-    ]);
-  });
-
-  it("leaves other members and locals named like a global alone", () => {
-    expect(problems("() => Math.max(Math.PI, Math.floor(1.5))")).toEqual([]);
-    expect(problems("(Math) => Math.random()")).toEqual([]);
-  });
-
-  it("does not follow dynamic keys or aliases", () => {
-    expect(problems('(key) => Math[key]() + Math["ran" + "dom"]()')).toEqual([]);
-    expect(problems("() => { const m = Math; return m.random() }")).toEqual([]);
+    expect(problems("() => [typeof a, { b }, ...c]")).toEqual(["freeVariable:a", "freeVariable:b", "freeVariable:c"]);
   });
 });
 
@@ -239,24 +206,19 @@ describe("check: this, super and the module", () => {
     ]);
   });
 
-  it("reports super in a method, whose home object lies outside it", () => {
-    expect(problems("m() { return super.m() }")).toEqual(["superReference:super"]);
-    expect(problems("m() { return () => super.m() }")).toEqual(["superReference:super"]);
+  it("reports super in an arrow function taken from a method", () => {
+    expect(check("() => super.m()")).toMatchObject({ form: "function", problems: [{ kind: "superReference" }] });
   });
 
   it("reads a function using super as a method named function, the only way it parses", () => {
     expect(check("function () { return super.m() }")).toMatchObject({
       form: "method",
-      problems: [{ kind: "superReference" }],
+      problems: [{ kind: "method", name: "method" }],
     });
   });
 
-  it("reports super in an arrow function taken from a method", () => {
-    expect(check("() => super.m()")).toMatchObject({ form: "function", problems: [{ kind: "superReference" }] });
-  });
-
   it("allows super in a class or object defined inside the function", () => {
-    expect(problems("() => [{ m() { return super.m } }, class extends Array { n() { return super.n } }]")).toEqual(
+    expect(problems("(Base) => [{ m() { return super.m } }, class extends Base { n() { return super.n } }]")).toEqual(
       [],
     );
   });
@@ -273,75 +235,11 @@ describe("check: this, super and the module", () => {
   });
 });
 
-describe("check: classes", () => {
-  it("marks a class by its constructor's directive", () => {
-    expect(check('class { constructor(x) { "use hermetic"; this.x = x } }').marked).toBe(true);
-    expect(check('class { m() { "use hermetic" } }').marked).toBe(false);
-  });
-
-  it("checks every part of the class", () => {
-    const source = `class Counter extends Base {
-      static zero = start;
-      [key] = 0;
-      static { log(this) }
-      count() { return helper(this) }
-    }`;
-    expect(problems(source)).toEqual([
-      "freeVariable:Base",
-      "freeVariable:start",
-      "freeVariable:key",
-      "freeVariable:log",
-      "freeVariable:helper",
-    ]);
-  });
-
-  it("binds the class's own name, private names and super inside it", () => {
-    const source = `class Stack extends Array {
-      #size = 0;
-      static of(...items) { return new Stack().push(...items) }
-      push(...items) { this.#size += items.length; return super.push(...items) }
-      get size() { return this.#size }
-    }`;
-    expect(problems(source)).toEqual([]);
-  });
-
-  it("reports this in computed keys, which run outside the class", () => {
-    expect(problems("class { [this.key]() {} }")).toEqual(["lexicalThis:this"]);
-  });
-
-  it("takes a class value", () => {
-    class Point {
-      x = 0;
-      y = 0;
-      norm() {
-        return Math.hypot(this.x, this.y);
-      }
-    }
-    expect(check(Point)).toMatchObject({ form: "class", hermetic: true });
-  });
-});
-
-describe("check: grounds", () => {
-  it("uses the allowed names of a bootstrap's result", () => {
-    const ground = { allow: { Date, Temporal: {} }, deny: ["Date.now"] };
-    expect(problems("() => [new Date(0), Temporal, Date.now()]", ground)).toEqual(["deniedPath:Date.now"]);
-    expect(problems("() => Math.max(1, 2)", ground)).toEqual(["freeVariable:Math"]);
-  });
-
-  it("drops a name denied whole", () => {
-    expect(problems("() => JSON", { allow: { JSON }, deny: ["JSON"] })).toEqual(["freeVariable:JSON"]);
-  });
-
-  it("rejects a malformed deny path", () => {
-    expect(() => check("() => 1", { allow: {}, deny: ["Math. random"] })).toThrow(TypeError);
-  });
-});
-
 describe("check: offsets", () => {
   it.each([
-    ["a function", "(a) => a + missing"],
-    ["a method", "m() { return missing }"],
-    ["a constructor-named method", "constructor() { return missing }"],
+    ["an arrow function", "(a) => a + missing"],
+    ["a function", "function (a) { return a + missing }"],
+    ["a nested function", "(a) => [1].map(function () { return missing })"],
   ])("point into the source of %s", (_label, source) => {
     const [problem] = check(source).problems;
     expect(problem && source.slice(problem.start, problem.end)).toBe("missing");
@@ -351,16 +249,15 @@ describe("check: offsets", () => {
 describe("checkHermetic", () => {
   const context: CheckContext = {
     parse: (source, sourceType) => parse(source, { ecmaVersion: "latest", sourceType, checkPrivateFields: false }),
-    ground: DEFAULT_GROUND,
   };
 
-  it("is itself marked and hermetic", () => {
+  it("is itself marked and hermetic: it reads no globals either", () => {
     expect(check(checkHermetic)).toEqual({ form: "function", marked: true, hermetic: true, problems: [] });
   });
 
   it("works when evaluated from its source alone and bound to a parser", () => {
     const relocated = new Function(`return ${Function.prototype.toString.call(checkHermetic)}`)() as typeof checkHermetic;
-    const sources = ["() => Math.random() + y", "m() { return super.m(this) }", "x => x), (y => y"];
+    const sources = ["() => Math.max(1) + y", "m() { return super.m(this) }", "x => x), (y => y", "function (a { }"];
     for (const source of sources) expect(relocated.call(context, source)).toEqual(check(source));
   });
 
@@ -371,9 +268,8 @@ describe("checkHermetic", () => {
         seen.push(sourceType);
         return context.parse(source, sourceType);
       },
-      ground: createGround(["Math"]),
     };
-    expect(checkHermetic.call(tracing, "function () { with (Math) {} }")).toMatchObject({ hermetic: false });
+    expect(checkHermetic.call(tracing, "function (o) { with (o) {} }")).toMatchObject({ hermetic: false });
     expect(seen).toEqual(["module", "module", "module", "script"]);
   });
 });

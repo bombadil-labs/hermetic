@@ -1,20 +1,4 @@
 import { check, type FunctionLike, type Problem } from "./check.ts";
-import { createGround, DEFAULT_GROUND, type GroundConfig } from "./ground.ts";
-
-/**
- * A ground bootstrap: a hermetic function that picks the allowed globals out
- * of the realm it is given. The linter calls it with a bare realm, and
- * `confine` with the global object of the compartment it builds.
- */
-export type GroundBootstrap = (realm: typeof globalThis) => GroundConfig;
-
-export interface ConfineOptions {
-  /**
-   * The bootstrap that chooses the allowed globals, the same one the linter
-   * loads. Without one, the default allowed globals apply.
-   */
-  readonly ground?: GroundBootstrap;
-}
 
 /** Thrown by `confine` when a function isn't hermetic, or can't be evaluated in a compartment. */
 export class HermeticError extends Error {
@@ -44,15 +28,17 @@ interface HardenedJs {
 
 /**
  * Checks a function and evaluates its source in a new Hardened JS
- * compartment, whose global object holds only the allowed globals. Returns
- * the function the compartment made, hardened.
+ * compartment whose global object is empty, and returns the function the
+ * compartment made, hardened. A hermetic function reads nothing but its
+ * inputs, so everything it uses comes through `this` and its arguments: bind
+ * or call it with them.
  *
- * `check` makes sure the function reads nothing but its inputs and the
- * allowed globals by name. The compartment covers what names can't show: its
- * built-ins are frozen, so the function can't change them for the rest of the
- * program, and a clock or random number reached through an alias throws.
- * Anything passed to the function is still its to change, so harden inputs
- * that it shouldn't.
+ * `check` makes sure the function names nothing outside itself. The
+ * compartment covers what names can't show: values still lead through their
+ * prototype chains to built-ins the whole program shares, and in a
+ * compartment those are frozen, so the function can't change them for the
+ * rest of the program. Anything passed to the function is still its to
+ * change, so harden inputs that it shouldn't.
  *
  * Hardened JS is the application's choice, since `lockdown()` freezes the
  * built-ins of the whole program: install `ses`, import it and call
@@ -61,39 +47,25 @@ interface HardenedJs {
  * @throws {HermeticError} When the function isn't hermetic, or the
  *   compartment refuses its source.
  */
-export function confine<F extends FunctionLike = (...args: unknown[]) => unknown>(
-  fn: string | F,
-  options: ConfineOptions = {},
-): F {
+export function confine<F extends FunctionLike = (...args: unknown[]) => unknown>(fn: string | F): F {
   const { Compartment, harden } = hardenedJs();
   const source = typeof fn === "function" ? Function.prototype.toString.call(fn) : fn;
-  const compartment = new Compartment({ __options__: true });
-  const realm = compartment.globalThis;
-  const config = options.ground?.(realm as typeof globalThis);
-
-  const result = check(source, config);
+  const result = check(source);
   if (!result.hermetic) {
     const found = result.problems.map((problem) => `${explain(problem)} (at ${problem.start})`);
     throw new HermeticError(`Not hermetic: ${found.join("; ")}.`, source, result.problems);
   }
 
-  // Leave the compartment only the allowed globals, then freeze its global
-  // object, so the function can keep nothing there between calls.
-  const ground = config ? createGround(Object.keys(config.allow), config.deny) : DEFAULT_GROUND;
-  for (const key of Reflect.ownKeys(realm)) {
-    if (typeof key === "string" && !ground.names.has(key)) Reflect.deleteProperty(realm, key);
-  }
-  if (config) {
-    for (const name of ground.names) {
-      const value = config.allow[name];
-      if (!(name in realm) || realm[name] !== value) realm[name] = harden(value);
-    }
-  }
+  // Empty the global object, then freeze it, so the function can keep nothing
+  // there between calls. Only undefined, NaN and Infinity can't be deleted.
+  const compartment = new Compartment({ __options__: true });
+  const realm = compartment.globalThis;
+  for (const key of Reflect.ownKeys(realm)) if (typeof key === "string") Reflect.deleteProperty(realm, key);
   harden(realm);
 
   let confined: unknown;
   try {
-    confined = result.form === "method" ? onlyMember(compartment.evaluate(`({${source}\n})`)) : compartment.evaluate(`(${source}\n)`);
+    confined = compartment.evaluate(`(${source}\n)`);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new HermeticError(`The compartment could not evaluate it: ${reason}`, source, [], { cause: error });
@@ -109,22 +81,11 @@ function hardenedJs(): HardenedJs {
   return { Compartment, harden };
 }
 
-/** The method or accessor an object literal of one member holds. */
-function onlyMember(object: unknown): unknown {
-  const [key] = Reflect.ownKeys(object as object);
-  const descriptor = key === undefined ? undefined : Reflect.getOwnPropertyDescriptor(object as object, key);
-  return descriptor?.value ?? descriptor?.get ?? descriptor?.set;
-}
-
 function explain(problem: Problem): string {
   const { kind, name } = problem;
   switch (kind) {
     case "freeVariable":
       return `'${name}' is a free variable`;
-    case "groundWrite":
-      return `it assigns to the allowed global '${name}'`;
-    case "deniedPath":
-      return `'${name}' is not allowed`;
     case "lexicalThis":
       return "'this' in an arrow function comes from the enclosing scope";
     case "lexicalNewTarget":
@@ -137,9 +98,11 @@ function explain(problem: Problem): string {
       return "import() loads a module that is not one of its inputs";
     case "withStatement":
       return "a 'with' statement can turn any name into a member of its object";
+    case "method":
+      return `it is a ${name}, which can't be hermetic yet`;
     case "syntax":
       return `it does not parse: ${name}`;
     case "notAFunction":
-      return "it is not a single function, method, accessor or class";
+      return "it is not a single function";
   }
 }

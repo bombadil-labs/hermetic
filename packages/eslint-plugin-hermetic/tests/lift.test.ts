@@ -5,7 +5,7 @@ import { analyze, createEnvironment } from "../src/analysis.ts";
 import { type LiftAssumptions, tryLift } from "../src/lift.ts";
 import { type FunctionNode, functionName } from "../src/marking.ts";
 import { isCandidate } from "../src/rules/prefer-hermetic.ts";
-import { createRule, sealed } from "../src/rules/sealed.ts";
+import { createRule } from "../src/rules/sealed.ts";
 
 /** What `tryLift` decides for each candidate in `code` that is not hermetic already: how it lifts, or why not. */
 function decisions(code: string, assumptions?: LiftAssumptions, filename = "module.ts"): Record<string, string> {
@@ -15,7 +15,7 @@ function decisions(code: string, assumptions?: LiftAssumptions, filename = "modu
     meta: { type: "suggestion", docs: { description: "Records what tryLift decides" }, schema: [], messages: {} },
     defaultOptions: [],
     create(context) {
-      const env = createEnvironment(context, {}, sealed);
+      const env = createEnvironment(context, {});
       return {
         ":function"(node: FunctionNode) {
           if (!isCandidate(node)) return;
@@ -50,13 +50,14 @@ describe("tryLift", () => {
         import { clamp } from "./clamp";
         const R = 1;
         class A { m() { return R; } }
+        export const o = { member: (x: number) => x * R };
         export const typed: (x: number) => number = (x) => x * R;
         export function hoisted(x: number) { return clamp(x); }
         export function stack() { return new Error().stack + R; }
         export const own = () => this.x + R;
       `),
     ).toEqual({
-      m: "a method or object member",
+      member: "an object member",
       typed: "a typed variable",
       hoisted: "a declaration that reads unsettled names",
       stack: "reads the stack",

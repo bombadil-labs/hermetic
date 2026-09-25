@@ -14,6 +14,26 @@ export function isFunctionNode(node: TSESTree.Node | null | undefined): node is 
   );
 }
 
+/**
+ * A method, accessor or other class member. Its `this` is its object, not its
+ * inputs, so it can't be hermetic yet. A function stored in an object
+ * literal's property, `{ area: function () {} }`, is still a function.
+ */
+export function isMethod(node: FunctionNode): boolean {
+  const parent = node.parent;
+  switch (parent.type) {
+    case AST_NODE_TYPES.MethodDefinition:
+    case AST_NODE_TYPES.PropertyDefinition:
+    case AST_NODE_TYPES.AccessorProperty:
+    case AST_NODE_TYPES.TSAbstractMethodDefinition:
+      return parent.value === node;
+    case AST_NODE_TYPES.Property:
+      return parent.value === node && (parent.method || parent.kind !== "init");
+    default:
+      return false;
+  }
+}
+
 /** True when the function carries a `"use hermetic"` directive or an `@hermetic` JSDoc tag. */
 export function isMarkedHermetic(node: FunctionNode, sourceCode: Readonly<TSESLint.SourceCode>): boolean {
   return hasHermeticDirective(node) || hasHermeticTag(node, sourceCode);

@@ -6,12 +6,13 @@ const ruleTester = new RuleTester({ languageOptions: { ecmaVersion: "latest", so
 
 ruleTester.run("sealed with espree", sealed as unknown as Rule.RuleModule, {
   valid: [
-    `function f(a) { "use hermetic"; return Math.max(a, 1); }`,
+    `function f(a) { "use hermetic"; return this.Math.max(a, 1); }`,
     `const g = function self(n) { "use hermetic"; return n ? self(n - 1) : 0; };`,
     `function fact(n) { "use hermetic"; return n <= 1 ? 1 : n * fact(n - 1); }`,
+    `function f(a) { "use hermetic"; return a === undefined ? NaN : Infinity; }`,
     {
-      code: `function f(a) { "use hermetic"; return Math.max(a, 1); }`,
-      languageOptions: { globals: { Math: "readonly" } },
+      code: `function f(a) { "use hermetic"; return a === undefined ? NaN : Infinity; }`,
+      languageOptions: { globals: { undefined: "readonly", NaN: "readonly", Infinity: "readonly" } },
     },
   ],
   invalid: [
@@ -21,7 +22,12 @@ ruleTester.run("sealed with espree", sealed as unknown as Rule.RuleModule, {
     },
     {
       code: `function f() { "use hermetic"; return Math.random(); }`,
-      errors: [{ messageId: "deniedPath", data: { path: "Math.random", fn: "f" } }],
+      errors: [{ messageId: "freeVariable", data: { name: "Math", fn: "f" } }],
+    },
+    {
+      code: `function f(a) { "use hermetic"; return Math.max(a, 1); }`,
+      languageOptions: { globals: { Math: "readonly" } },
+      errors: [{ messageId: "freeVariable", data: { name: "Math", fn: "f" } }],
     },
     {
       code: `const f = () => { "use hermetic"; return this; };`,
@@ -33,9 +39,16 @@ ruleTester.run("sealed with espree", sealed as unknown as Rule.RuleModule, {
       errors: [{ messageId: "freeVariable", data: { name: "window", fn: "f" } }],
     },
     {
-      code: `var Math = {}; function f() { "use hermetic"; return Math.max(1, 2); }`,
+      code: `var NaN2 = 0; var undefined = 1; function f() { "use hermetic"; return [undefined, NaN2]; }`,
       languageOptions: { sourceType: "script" },
-      errors: [{ messageId: "shadowedGround", data: { name: "Math", fn: "f" } }],
+      errors: [
+        { messageId: "freeVariable", data: { name: "undefined", fn: "f" } },
+        { messageId: "freeVariable", data: { name: "NaN2", fn: "f" } },
+      ],
+    },
+    {
+      code: `const o = { m() { "use hermetic"; return this.x; } };`,
+      errors: [{ messageId: "method", data: { fn: "m" } }],
     },
   ],
 });

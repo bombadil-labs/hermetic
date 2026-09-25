@@ -6,10 +6,10 @@ Mark functions that are already hermetic, and optionally rewrite others so they 
 
 ## Rule details
 
-The rule considers the outermost functions bound to a name: function declarations, variable initializers, and object and class members. Callbacks passed as arguments and IIFEs are ignored, and so are functions that are already marked.
+The rule considers the outermost functions bound to a name: function declarations, variable initializers, and functions stored in object properties. Methods can't be hermetic yet, so they aren't considered. Callbacks passed as arguments and IIFEs are ignored, and so are functions that are already marked.
 
 - **`alreadyHermetic`**: the function would pass `hermetic/sealed` as it stands. The fix marks it. A block body gets `"use hermetic"` straight after its opening brace, so comments such as `// @ts-expect-error` stay with the statements they precede. An expression-bodied arrow gets an `@hermetic` tag, added to its JSDoc block if it has one.
-- **`liftable`**, with `lift: true`: the function's only hidden inputs are module-level values and globals. The fix moves the body into a new hermetic function that reads them from `this`, and turns the original function into a wrapper that calls it with them.
+- **`liftable`**, with `lift: true`: the function's only hidden inputs are module-level values and globals, built-ins such as `Math` included. The fix moves the body into a new hermetic function that reads them from `this`, and turns the original function into a wrapper that calls it with them.
 
 With `lift: true`, this module:
 
@@ -19,14 +19,14 @@ import { audit } from "./audit";
 
 let discounts = 0;
 
-export function round(amount: number) {
-  return Math.round(amount);
+export function half(amount: number) {
+  return amount / 2;
 }
 
+export const round = (amount: number) => Math.round(amount);
+
 /** Converts dollars to whole cents. */
-export function toCents(dollars: number) {
-  return round(units.centsPerDollar * dollars);
-}
+export const toCents = (dollars: number) => round(units.centsPerDollar * dollars);
 
 export const discount = (dollars: number, rate = 0.2) => {
   discounts++;
@@ -46,15 +46,24 @@ import { audit } from "./audit";
 
 let discounts = 0;
 
-export function round(amount: number) {
+export function half(amount: number) {
   "use hermetic";
-  return Math.round(amount);
+  return amount / 2;
+}
+
+export const round = (amount: number) => roundHermetic.call(roundContext, amount);
+
+const roundContext = {
+  get Math(): typeof Math { return Math; },
+};
+
+function roundHermetic(this: { Math: typeof Math }, amount: number) {
+  "use hermetic";
+  return this.Math.round(amount);
 }
 
 /** Converts dollars to whole cents. */
-export function toCents(dollars: number) {
-  return toCentsHermetic.call({ round, units }, dollars);
-}
+export const toCents = (dollars: number) => toCentsHermetic.call({ round, units }, dollars);
 
 function toCentsHermetic(this: { round: typeof round; units: typeof units }, dollars: number) {
   "use hermetic";
@@ -80,7 +89,7 @@ export function report(dollars: number) {
 }
 ```
 
-`round` was already hermetic, so it is marked. `toCents` and `discount` are lifted. `report` is skipped, for the reason given under [what the lift skips](#what-the-lift-skips).
+`half` was already hermetic, so it is marked. `round`, `toCents` and `discount` are lifted. `round` reads the global `Math`, and a hermetic function reads no globals, so `Math` is passed in like any other hidden input. `report` is skipped, for the reason given under [what the lift skips](#what-the-lift-skips).
 
 ### The wrapper and the hermetic function
 
@@ -89,7 +98,7 @@ The wrapper keeps the function's name, type parameters, parameters, defaults, re
 The wrapper passes `this` in one of two forms:
 
 - **Directly**, as in `toCents`, when every lifted value is *settled*: initialized whenever the wrapper can run, and never reassigned. Function declarations and namespace imports are always settled, and so are constants and classes declared above a wrapper that isn't hoisted.
-- **Through a shared context object**, as in `discount`, otherwise. The object is created once, right after the wrapper. Its getters read each value when the hermetic function does, and its setters write assignments back. A wrapper that isn't hoisted can't run before its own statement, and the context object's statement comes right after it, so the object always exists when the wrapper runs.
+- **Through a shared context object**, as in `round` and `discount`, otherwise. Globals always go this way, since other code can replace or remove them. The object is created once, right after the wrapper. Its getters read each value when the hermetic function does, and its setters write assignments back. A wrapper that isn't hoisted can't run before its own statement, and the context object's statement comes right after it, so the object always exists when the wrapper runs.
 
 A function declaration is hoisted. It can run before any statement of its module, and in an import cycle, before its imports are initialized. So a declaration is only lifted when its values can be passed directly.
 
@@ -141,13 +150,11 @@ On the corpus, unlifting the lifted code gives back the marked original in every
 type Options = {
   lift?: boolean; // default false
   types?: "allow" | "structural-only"; // default "allow"
-  ground?: string;
-  aliasing?: "best-effort" | "forbid"; // default "best-effort"
 };
 ```
 
 - **`lift`**: also rewrite functions whose only hidden inputs are module-level values and globals, as described above.
-- **`types`**, **`ground`**, **`aliasing`**: the same as for [`hermetic/sealed`](sealed.md#options), so that "already hermetic" means what `sealed` will enforce. Both rules also read these from `settings.hermetic`, which is the simplest way to keep them in step.
+- **`types`**: the same as for [`hermetic/sealed`](sealed.md#options), so that "already hermetic" means what `sealed` will enforce. Both rules also read it from `settings.hermetic`, which is the simplest way to keep them in step.
 
 ## Making a codebase hermetic
 

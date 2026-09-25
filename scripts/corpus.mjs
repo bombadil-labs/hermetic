@@ -17,6 +17,13 @@
 //   npm run corpus -- report     writes site/data/corpus.json for the case studies, from all of the above;
 //                                commit first: every result records the commit it came from
 //
+// An experiment, kept out of the report: the lift with each wrapper rebound
+// as a bound function (scripts/rebind.mjs).
+//
+//   npm run corpus -- bind       rebinds the lifted corpus and type-checks it
+//   npm run corpus -- effect --bind   Effect's test suite on its lifted and rebound source
+//   npm run corpus -- bench --bind    the benchmark, with a rebound copy next to the lifted one
+//
 // Library code is one particular shape: few globals, many small helpers, heavy
 // use of namespace imports. Application code reaches for more ambient
 // authority (fetch, Date, process) and has more classes and components, so
@@ -36,6 +43,7 @@ import { unlift } from "../packages/eslint-plugin-hermetic/src/unlift.ts";
 import { functionName, isFunctionNode, isMarkedHermetic, isMethod } from "../packages/eslint-plugin-hermetic/src/marking.ts";
 import { isCandidate } from "../packages/eslint-plugin-hermetic/src/rules/prefer-hermetic.ts";
 import { check } from "@bombadil/hermetic";
+import { rebind } from "./rebind.mjs";
 
 const PACKAGES = {
   effect: "3.22.2",
@@ -53,6 +61,7 @@ const root = fileURLToPath(new URL("../.corpus/", import.meta.url));
 const original = path.join(root, "original");
 const fixedDir = path.join(root, "fixed");
 const roundtripDir = path.join(root, "roundtrip");
+const boundDir = path.join(root, "bound");
 const resultsDir = path.join(root, "results");
 const siteData = fileURLToPath(new URL("../site/data/corpus.json", import.meta.url));
 
@@ -498,6 +507,49 @@ function effectCheckout() {
 
 const shell = process.platform === "win32";
 
+/** Rebinds every lifted source file under `dir` in place: the experiment in scripts/rebind.mjs. */
+function rebindInPlace(dir) {
+  let rebound = 0;
+  for (const file of sourceFiles(dir)) {
+    const result = rebind(fs.readFileSync(file, "utf8"), file);
+    if (result.rebound === 0) continue;
+    rebound += result.rebound;
+    fs.writeFileSync(file, result.code);
+  }
+  return rebound;
+}
+
+/**
+ * The experiment's type check: the corpus lifted, then rebound, against the
+ * original. A bound function's type comes from its core through a generic
+ * helper, so this shows what binding loses that the wrapper keeps.
+ */
+function runBind() {
+  fs.rmSync(boundDir, { recursive: true, force: true });
+  fs.cpSync(original, boundDir, { recursive: true });
+  const { changed } = fixInPlace(boundDir);
+  const lifted = sourceFiles(boundDir)
+    .map((file) => unlift(fs.readFileSync(file, "utf8"), file).unlifted.length)
+    .reduce((a, b) => a + b, 0);
+  const rebound = rebindInPlace(boundDir);
+  console.log(`\nBind: ${lifted} functions lifted in ${changed} files, ${rebound} of them rebound`);
+  console.log("Type checking the original and rebound trees...");
+  const { before, after, introduced } = introducedTypeErrors(boundDir);
+  const total = (counts) => [...counts.values()].reduce((a, b) => a + b, 0);
+  console.log(`  ${total(before)} type errors before, ${total(after)} after, ${introduced.length} kinds introduced`);
+  const byCode = new Map();
+  for (const line of introduced) {
+    const [count, key] = line.split(" x ");
+    const code = /TS\d+/.exec(key)?.[0] ?? "other";
+    byCode.set(code, (byCode.get(code) ?? 0) + Number(count));
+  }
+  console.log(`  By code: ${[...byCode].sort((a, b) => b[1] - a[1]).map(([code, n]) => `${n} ${code}`).join(", ")}`);
+  for (const line of introduced.slice(0, 12)) console.log(`  ${line.slice(0, 240)}`);
+  fs.mkdirSync(resultsDir, { recursive: true });
+  const result = { date: new Date().toISOString(), ...provenance(), lifted, rebound, errorsBefore: total(before), errorsAfter: total(after), byCode: Object.fromEntries(byCode), introduced };
+  fs.writeFileSync(path.join(resultsDir, "bind.json"), `${JSON.stringify(result, null, 1)}\n`);
+}
+
 /** Unlifts every source file under `dir` in place, and reports what it folded back and skipped. */
 function unliftInPlace(dir) {
   let folded = 0;
@@ -520,14 +572,16 @@ function runEffect(options) {
     .reduce((a, b) => a + b, 0);
   console.log(`\nEffect: ${changed} files changed, ${lifted} functions lifted`);
   console.log(`  ${unparsable} parse errors, ${unsealed} sealed errors, ${unsettled} files a second pass would change`);
+  if (options.bind) console.log(`  ${rebindInPlace(src)} rebound as bound functions`);
   if (options.unlift) {
     const { folded, skipped } = unliftInPlace(src);
     console.log(`  ${folded} folded back by unlift, ${skipped.length} skipped`);
     for (const line of skipped.slice(0, 10)) console.log(`  ${line}`);
   }
-  console.log(`Running Effect's test suite on the ${options.unlift ? "unlifted" : "lifted"} source...`);
+  const source = options.unlift ? "unlifted" : options.bind ? "bound" : "lifted";
+  console.log(`Running Effect's test suite on the ${source} source...`);
   fs.mkdirSync(resultsDir, { recursive: true });
-  const output = path.join(resultsDir, `effect-${options.unlift ? "unlifted" : "lifted"}.vitest.json`);
+  const output = path.join(resultsDir, `effect-${source}.vitest.json`);
   execFileSync(
     path.join(checkout, "node_modules", ".bin", shell ? "vitest.cmd" : "vitest"),
     ["run", "--reporter=dot", "--reporter=json", `--outputFile.json=${output}`],
@@ -535,7 +589,7 @@ function runEffect(options) {
   );
   const suite = JSON.parse(fs.readFileSync(output, "utf8"));
   const summary = {
-    source: options.unlift ? "unlifted" : "lifted",
+    source,
     lifted,
     date: new Date().toISOString(),
     ...provenance(),
@@ -599,17 +653,22 @@ console.log(JSON.stringify(medians))
  * original is the noise. Every copy runs once in each position of the order,
  * and each figure is the best median across its processes.
  */
-function runBench() {
+function runBench(options = {}) {
   const checkout = effectCheckout();
   const packageDir = path.join(checkout, "packages/effect");
   const benchDir = path.join(packageDir, ".hermetic-bench");
   fs.rmSync(benchDir, { recursive: true, force: true });
-  const trees = ["original", "lifted", "unlifted", "control"];
+  const trees = options.bind ? ["original", "lifted", "bound", "control"] : ["original", "lifted", "unlifted", "control"];
   for (const tree of trees) fs.cpSync(path.join(packageDir, "src"), path.join(benchDir, tree), { recursive: true });
   fixInPlace(path.join(benchDir, "lifted"));
-  fixInPlace(path.join(benchDir, "unlifted"));
-  const { folded, skipped } = unliftInPlace(path.join(benchDir, "unlifted"));
-  console.log(`\nBenchmark: ${folded} bindings folded back in the unlifted copy, ${skipped.length} skipped`);
+  if (options.bind) {
+    fixInPlace(path.join(benchDir, "bound"));
+    console.log(`\nBenchmark: ${rebindInPlace(path.join(benchDir, "bound"))} bindings rebound in the bound copy`);
+  } else {
+    fixInPlace(path.join(benchDir, "unlifted"));
+    const { folded, skipped } = unliftInPlace(path.join(benchDir, "unlifted"));
+    console.log(`\nBenchmark: ${folded} bindings folded back in the unlifted copy, ${skipped.length} skipped`);
+  }
   fs.writeFileSync(path.join(benchDir, "run.ts"), BENCHMARK);
   const best = {};
   for (let round = 0; round < trees.length; round++) {
@@ -623,7 +682,7 @@ function runBench() {
   }
   const result = { date: new Date().toISOString(), ...provenance(), node: process.version, processes: trees.length, samples: BENCH_SAMPLES, workloads: best };
   fs.mkdirSync(resultsDir, { recursive: true });
-  fs.writeFileSync(path.join(resultsDir, "bench.json"), `${JSON.stringify(result, null, 2)}\n`);
+  fs.writeFileSync(path.join(resultsDir, options.bind ? "bench-bind.json" : "bench.json"), `${JSON.stringify(result, null, 2)}\n`);
   console.log(`  ${"workload".padEnd(26)}${trees.map((tree) => tree.padStart(18)).join("")}`);
   for (const [workload, times] of Object.entries(best)) {
     const cells = trees.map((tree) => {
@@ -896,7 +955,8 @@ if (command === "stress" || command === "all") runStress();
 if (command === "fix" || command === "all") runFix();
 if (command === "roundtrip" || command === "all") runRoundtrip();
 if (command === "crosscheck" || command === "all") runCrosscheck();
-if (command === "effect") runEffect({ unlift: process.argv.includes("--unlift") });
-if (command === "bench") runBench();
+if (command === "effect") runEffect({ unlift: process.argv.includes("--unlift"), bind: process.argv.includes("--bind") });
+if (command === "bench") runBench({ bind: process.argv.includes("--bind") });
+if (command === "bind") runBind();
 if (command === "records") runRecords();
 if (command === "report") runReport();

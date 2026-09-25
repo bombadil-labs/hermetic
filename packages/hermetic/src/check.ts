@@ -67,6 +67,14 @@ export interface CheckResult {
   /** It is a function that reads nothing but its inputs. */
   readonly hermetic: boolean;
   readonly problems: readonly Problem[];
+  /**
+   * The names the function reads from `this`, in the order it first reads
+   * them: `this.name`, or `const { name } = this`. Undefined when it uses
+   * `this` in a way that doesn't name what it reads, as in `this[key]` or
+   * `helper(this)`, and for anything but a function. An arrow function's
+   * `this` isn't one of its inputs, so it needs nothing.
+   */
+  readonly needs: readonly string[] | undefined;
 }
 
 /** A function or a class. */
@@ -109,6 +117,8 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
     readonly ownThis: boolean;
     /** `super` refers to a class or object inside the checked function. */
     readonly ownSuper: boolean;
+    /** `this` is the checked function's own, one of its inputs. */
+    readonly rootThis: boolean;
   }
   type FunctionFound = ES.FunctionExpression | ES.ArrowFunctionExpression;
   type Found = FunctionFound | ES.ClassExpression;
@@ -116,6 +126,9 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
 
   const problems: Problem[] = [];
   const references: { name: string; scope: Scope; node: ES.Node }[] = [];
+  const needs: string[] = [];
+  /** The function uses its `this` other than to read names from it. */
+  let unlisted = false;
   let offset = 0;
 
   function report(kind: ProblemKind, name: string, node: ES.Node): void {
@@ -124,7 +137,25 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
   }
 
   function failure(kind: ProblemKind, name: string, start: number, end: number): CheckResult {
-    return { form: undefined, marked: false, hermetic: false, problems: [{ kind, name, start, end }] };
+    return { form: undefined, marked: false, hermetic: false, problems: [{ kind, name, start, end }], needs: undefined };
+  }
+
+  function need(name: string): void {
+    if (!needs.includes(name)) needs.push(name);
+  }
+
+  /** Records the names a pattern takes from the function's `this`; anything it can't name makes the list incomplete. */
+  function destructure(pattern: ES.Pattern): void {
+    if (pattern.type !== "ObjectPattern") {
+      unlisted = true;
+      return;
+    }
+    for (const property of pattern.properties) {
+      if (property.type === "RestElement" || property.computed) unlisted = true;
+      else if (property.key.type === "Identifier") need(property.key.name);
+      else if (property.key.type === "Literal" && typeof property.key.value === "string") need(property.key.value);
+      else unlisted = true;
+    }
   }
 
   function scopeIn(parent: Scope | undefined): Scope {
@@ -248,7 +279,7 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
   // A method's or class's `this` is its object, not its inputs, so neither can be hermetic yet.
   if (form !== "function") {
     const name = form === "class" ? "class" : accessor ? "accessor" : "method";
-    return { form, marked, hermetic: false, problems: [{ kind: "method", name, start: 0, end: source.length }] };
+    return { form, marked, hermetic: false, problems: [{ kind: "method", name, start: 0, end: source.length }], needs: undefined };
   }
 
   function declare(pattern: ES.Pattern, context: Context, target: Scope): void {
@@ -315,9 +346,9 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
    * Parameters get a scope of their own, so a default can't see the body's
    * declarations, and the body gets the next one. `home` marks a method or
    * accessor, whose `super` is its own when it is defined inside the checked
-   * function.
+   * function, and `root` the checked function itself.
    */
-  function visitFunction(fn: ES.Function, outer: Context, home: boolean): void {
+  function visitFunction(fn: ES.Function, outer: Context, home: boolean, root: boolean): void {
     let enclosing = outer.scope;
     if (fn.type === "FunctionExpression" && fn.id) {
       // A named function expression binds its own name, around its parameters.
@@ -332,6 +363,7 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
       varScope: parameters,
       ownThis: arrow ? outer.ownThis : true,
       ownSuper: arrow ? outer.ownSuper : home,
+      rootThis: arrow ? outer.rootThis : root,
     };
     for (const parameter of fn.params) declare(parameter, inner, parameters);
     const body = scopeIn(parameters);
@@ -349,13 +381,13 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
     for (const member of node.body.body) {
       if (member.type === "StaticBlock") {
         const block = scopeIn(scope);
-        const blockContext: Context = { scope: block, varScope: block, ownThis: true, ownSuper: true };
+        const blockContext: Context = { scope: block, varScope: block, ownThis: true, ownSuper: true, rootThis: false };
         for (const statement of member.body) visit(statement, blockContext);
         continue;
       }
       if (member.computed) visit(member.key, around);
-      if (member.type === "MethodDefinition") visitFunction(member.value, around, true);
-      else if (member.value) visit(member.value, { ...around, scope: scopeIn(scope), ownThis: true, ownSuper: true });
+      if (member.type === "MethodDefinition") visitFunction(member.value, around, true, false);
+      else if (member.value) visit(member.value, { ...around, scope: scopeIn(scope), ownThis: true, ownSuper: true, rootThis: false });
     }
   }
 
@@ -376,6 +408,7 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
         return;
       case "ThisExpression":
         if (!context.ownThis) report("lexicalThis", "this", node);
+        else if (context.rootThis) unlisted = true;
         return;
       case "Super":
         if (!context.ownSuper) report("superReference", "super", node);
@@ -391,21 +424,26 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
         visitChildren(node, context);
         return;
       case "MemberExpression":
-        visit(node.object, context);
+        if (node.object.type === "ThisExpression" && context.rootThis) {
+          if (node.computed) unlisted = true;
+          else if (node.property.type === "Identifier") need(node.property.name);
+        } else {
+          visit(node.object, context);
+        }
         if (node.computed) visit(node.property, context);
         return;
       case "Property":
         if (node.computed) visit(node.key, context);
-        if (node.method || node.kind !== "init") visitFunction(node.value as ES.FunctionExpression, context, true);
+        if (node.method || node.kind !== "init") visitFunction(node.value as ES.FunctionExpression, context, true, false);
         else visit(node.value, context);
         return;
       case "FunctionDeclaration":
         if (node.id) context.scope.names.push(node.id.name);
-        visitFunction(node, context, false);
+        visitFunction(node, context, false, false);
         return;
       case "FunctionExpression":
       case "ArrowFunctionExpression":
-        visitFunction(node, context, false);
+        visitFunction(node, context, false, false);
         return;
       case "ClassDeclaration":
         if (node.id) context.scope.names.push(node.id.name);
@@ -418,14 +456,16 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
         const target = node.kind === "var" ? context.varScope : context.scope;
         for (const declarator of node.declarations) {
           declare(declarator.id, context, target);
-          if (declarator.init) visit(declarator.init, context);
+          if (declarator.init?.type === "ThisExpression" && context.rootThis) destructure(declarator.id);
+          else if (declarator.init) visit(declarator.init, context);
         }
         return;
       }
       case "AssignmentExpression":
         if (node.left.type === "MemberExpression") visit(node.left, context);
         else assign(node.left, context);
-        visit(node.right, context);
+        if (node.right.type === "ThisExpression" && context.rootThis && node.operator === "=") destructure(node.left);
+        else visit(node.right, context);
         return;
       case "UpdateExpression":
         visit(node.argument, context);
@@ -485,12 +525,12 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
   }
 
   const outside = scopeIn(undefined);
-  visitFunction(root as ES.Function, { scope: outside, varScope: outside, ownThis: false, ownSuper: false }, false);
+  visitFunction(root as ES.Function, { scope: outside, varScope: outside, ownThis: false, ownSuper: false, rootThis: false }, false, true);
 
   for (const reference of references) {
     if (resolves(reference.name, reference.scope) || immutable.includes(reference.name)) continue;
     report("freeVariable", reference.name, reference.node);
   }
   problems.sort((a, b) => a.start - b.start || a.end - b.end);
-  return { form, marked, hermetic: problems.length === 0, problems };
+  return { form, marked, hermetic: problems.length === 0, problems, needs: unlisted ? undefined : needs };
 }

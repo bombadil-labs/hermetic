@@ -127,7 +127,7 @@ The fix only applies when the rewrite can't change behavior or types. It skips:
 - **Functions called through `this` receive it as their `this`.** The hermetic function calls `this.round(...)` where the original called `round(...)`, so `round` runs with the context object as `this` instead of `undefined`. Functions that ignore `this`, which is nearly all module functions, are unaffected.
 - **A global function called without a receiver is still called without one.** The hermetic function calls `fetch(url)` as `(0, this.fetch)(url)`, so `fetch` still gets `undefined` as its `this`. ECMAScript's own functions ignore their receiver, so `Number(x)` becomes `this.Number(x)`.
 - **Async functions and generators** become plain functions that return the hermetic function's promise or iterator.
-- **Each call costs one more call and some property reads.** In microbenchmarks of Effect's hottest paths (collections, the fiber runtime, Schema decoding), the lifted library ran 14 to 55 percent slower. The cost is per call, so it matters where calls are cheap and frequent. [Unlifting](#unlifting-at-build-time) removes it from builds.
+- **Each call costs one more call and some property reads.** In microbenchmarks of Effect's hottest paths (collections, the fiber runtime, Schema decoding), the lifted library ran 18 to 76 percent slower. The cost is per call, so it matters where calls are cheap and frequent. [Unlifting](#unlifting-at-build-time) removes it from builds.
 - **Formatting and ordering.** The fix emits plain formatting, so run your formatter afterwards. The wrapper refers to its context object and hermetic function, which are declared after it, and `no-use-before-define` reports that unless its `functions` and `variables` options are off.
 
 ### Unlifting at build time
@@ -140,9 +140,9 @@ On the corpus, unlifting the lifted code gives back the marked original in every
 
 | Workload | Lifted | Unlifted | Original again |
 | --- | --- | --- | --- |
-| `Effect.gen` with `map` and `flatMap` | +14% | +4% | +1% |
-| `Chunk`, `HashMap`, `Option` | +55% | +7% | 0% |
-| `Schema` decoding | +31% | +3% | −8% |
+| `Effect.gen` with `map` and `flatMap` | +18% | −15% | −4% |
+| `Chunk`, `HashMap`, `Option` | +76% | −6% | −4% |
+| `Schema` decoding | +76% | −8% | −7% |
 
 `npm run corpus -- roundtrip`, `npm run corpus -- effect --unlift` and `npm run corpus -- bench` reproduce these, and the [Effect case study](https://bombadil-labs.github.io/hermetic/case-studies/effect.html) has the full story. `unlift` lives in [`src/unlift.ts`](../../src/unlift.ts) and is not exported yet: a bundler plugin that applies it to production builds comes next.
 

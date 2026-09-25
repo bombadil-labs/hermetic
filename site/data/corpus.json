@@ -1,7 +1,7 @@
 {
   "generated": {
-    "date": "2026-09-25T21:00:08.313Z",
-    "commit": "e1e77af",
+    "date": "2026-09-25T21:53:25.637Z",
+    "commit": "ec662a6",
     "dirty": false,
     "node": "v22.22.2"
   },
@@ -365,8 +365,8 @@
     "lifted": {
       "source": "lifted",
       "lifted": 2475,
-      "date": "2026-09-25T20:48:19.033Z",
-      "commit": "e1e77af",
+      "date": "2026-09-25T21:42:02.457Z",
+      "commit": "ec662a6",
       "dirty": false,
       "files": 520,
       "tests": 6243,
@@ -377,8 +377,8 @@
     "unlifted": {
       "source": "unlifted",
       "lifted": 2475,
-      "date": "2026-09-25T20:52:29.632Z",
-      "commit": "e1e77af",
+      "date": "2026-09-25T21:45:58.861Z",
+      "commit": "ec662a6",
       "dirty": false,
       "files": 520,
       "tests": 6243,
@@ -387,30 +387,30 @@
       "skipped": 10
     },
     "bench": {
-      "date": "2026-09-25T20:54:06.915Z",
-      "commit": "e1e77af",
+      "date": "2026-09-25T21:47:24.991Z",
+      "commit": "ec662a6",
       "dirty": false,
       "node": "v22.22.2",
       "processes": 4,
       "samples": 7,
       "workloads": {
         "Effect.gen, map, flatMap": {
-          "original": 61.156656999999996,
-          "lifted": 69.66234299999996,
-          "unlifted": 63.63791500000002,
-          "control": 61.87312599999996
+          "original": 46.1525529999999,
+          "lifted": 54.24568899999997,
+          "unlifted": 39.107065000000034,
+          "control": 44.44816300000002
         },
         "Chunk, HashMap, Option": {
-          "original": 35.561539999999695,
-          "lifted": 54.98124299999995,
-          "unlifted": 38.09864500000003,
-          "control": 35.68907100000001
+          "original": 29.735090000000127,
+          "lifted": 52.30012799999986,
+          "unlifted": 27.95335299999988,
+          "control": 28.687347000000045
         },
         "Schema decode": {
-          "original": 32.70063600000003,
-          "lifted": 42.895397,
-          "unlifted": 33.74622999999974,
-          "control": 30.193852000000106
+          "original": 26.191669000000047,
+          "lifted": 46.16382199999998,
+          "unlifted": 24.177469999999857,
+          "control": 24.320220999999947
         }
       }
     }

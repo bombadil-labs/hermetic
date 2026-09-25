@@ -3,7 +3,7 @@
   "version": "0.3.0",
   "description": "Hermetic functions at runtime: check that a function reads nothing but its inputs, and run it confined.",
   "license": "MIT",
-  "homepage": "https://github.com/bombadil-labs/hermetic#readme",
+  "homepage": "https://bombadil-labs.github.io/hermetic/",
   "bugs": {
     "url": "https://github.com/bombadil-labs/hermetic/issues"
   },
@@ -13,6 +13,7 @@
     "directory": "packages/hermetic"
   },
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

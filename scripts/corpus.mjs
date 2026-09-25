@@ -782,6 +782,7 @@ function runReport() {
   const records = writeRecords(censusRecords());
   const fixed = runFix();
   const roundtrip = runRoundtrip();
+  const crosscheck = runCrosscheck();
   const libraries = LIBRARIES.map((library) => {
     const mine = records.filter((record) => libraryOf(record.file) === library);
     const count = (test) => mine.filter(test).length;
@@ -842,6 +843,18 @@ function runReport() {
   const data = {
     generated,
     libraries,
+    crosscheck: {
+      builds: PUBLISHED.map((build) => ({ build, version: PACKAGES[Object.keys(PACKAGES).find((name) => build.startsWith(`${name}/`))] })),
+      files: crosscheck.files,
+      functions: crosscheck.functions,
+      methods: crosscheck.methods,
+      classes: crosscheck.classes,
+      hermetic: crosscheck.hermetic,
+      same: crosscheck.same,
+      agreed: crosscheck.agreed,
+      moduleOnly: crosscheck.moduleOnly.map(({ file, line, name, sealedOnly }) => ({ file, line, name, reported: sealedOnly })),
+      differing: crosscheck.differing.length,
+    },
     effect: { tag: EFFECT.tag, lifted: readResult("effect-lifted"), unlifted: readResult("effect-unlifted"), bench: readResult("bench") },
   };
   fs.mkdirSync(path.dirname(siteData), { recursive: true });
@@ -850,6 +863,7 @@ function runReport() {
   for (const library of libraries) {
     console.log(`  ${library.name}: ${library.candidates} candidates, ${library.hermetic} hermetic, ${library.direct + library.shared} lifted, ${library.skipped} skipped`);
   }
+  console.log(`  Crosscheck: ${crosscheck.functions} functions, ${crosscheck.moduleOnly.length} differing only where sealed sees the module, ${crosscheck.differing.length} differing otherwise`);
   const runs = { lifted: "effect", unlifted: "effect --unlift", bench: "bench" };
   for (const [key, command] of Object.entries(runs)) {
     const result = data.effect[key];

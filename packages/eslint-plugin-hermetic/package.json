@@ -3,7 +3,7 @@
   "version": "0.3.0",
   "description": "ESLint rules for hermetic functions: functions that read nothing but their inputs.",
   "license": "MIT",
-  "homepage": "https://github.com/bombadil-labs/hermetic#readme",
+  "homepage": "https://bombadil-labs.github.io/hermetic/",
   "bugs": {
     "url": "https://github.com/bombadil-labs/hermetic/issues"
   },

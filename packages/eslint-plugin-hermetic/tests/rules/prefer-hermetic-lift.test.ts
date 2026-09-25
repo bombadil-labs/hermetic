@@ -54,6 +54,16 @@ const R = 2;`,
 export function f(a: number) { return clamp(a); }`, options: lift },
     { name: "a function declaration reading a global", code: `export function now() { return Date.now(); }`, options: lift },
     {
+      name: "a direct eval, which sees the caller's scope, and wouldn't through this",
+      code: `export const run = (code: string) => { const local = 1; return eval(code) + local; };`,
+      options: lift,
+    },
+    {
+      name: "a host function called bare and read as a value, which a bound function would change",
+      code: `declare const hostFn: { (): number; version: number };\nexport const f = () => hostFn() + hostFn.version;`,
+      options: lift,
+    },
+    {
       name: "a default that calls a function, which the core would call again if it returned undefined",
       code: `const R = 1;\ndeclare function fallback(): undefined;\nexport const f = (x = fallback()) => [x, R];`,
       options: lift,
@@ -424,8 +434,13 @@ describe("lift semantics", () => {
       probe: "probe",
     },
     {
-      name: "a denied path",
+      name: "a built-in's members, read through the context",
       code: `const roll = () => Math.random() < 2 && Math.max(1, 2) === 2;\nconst probe = () => [roll()];`,
+      probe: "probe",
+    },
+    {
+      name: "a built-in called bare keeps its own properties",
+      code: `const parse = (s: string) => { const n = Number(s); return Number.isNaN(n) ? Number.MAX_SAFE_INTEGER : BigInt(n) + BigInt.asUintN(8, 257n); };\nconst probe = () => [parse("4"), parse("x")];`,
       probe: "probe",
     },
     {

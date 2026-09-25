@@ -9,13 +9,31 @@ type SourceCode = Readonly<TSESLint.SourceCode>;
 /** Problems a lift can resolve: references to module bindings and globals. */
 const LIFTABLE: ReadonlySet<MessageIds> = new Set(["freeVariable"]);
 
+/**
+ * The functions and constructors ECMAScript puts on the global object. Called
+ * without `new`, each ignores its receiver, so the core can call one through
+ * `this` as it is, with its own properties, such as `Number.isNaN`. A host
+ * function, such as `fetch`, may need the global object as its receiver.
+ */
+const ECMASCRIPT_FUNCTIONS: ReadonlySet<string> = new Set([
+  "AggregateError", "Array", "ArrayBuffer", "BigInt", "BigInt64Array", "BigUint64Array", "Boolean", "DataView", "Date",
+  "decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent", "Error", "escape", "eval", "EvalError",
+  "FinalizationRegistry", "Float16Array", "Float32Array", "Float64Array", "Function", "Int16Array", "Int32Array",
+  "Int8Array", "isFinite", "isNaN", "Iterator", "Map", "Number", "Object", "parseFloat", "parseInt", "Promise", "Proxy",
+  "RangeError", "ReferenceError", "RegExp", "Set", "SharedArrayBuffer", "String", "Symbol", "SyntaxError", "TypeError",
+  "Uint16Array", "Uint32Array", "Uint8Array", "Uint8ClampedArray", "unescape", "URIError", "WeakMap", "WeakRef", "WeakSet",
+]);
+
 /** A binding the lift moves into the function's context. */
 interface Lifted {
   readonly name: string;
   readonly global: boolean;
   /** Written by the function, so the context needs a setter. */
   writable: boolean;
-  /** A global called directly. A bare call runs with the global object as its receiver; keep it that way. */
+  /**
+   * A host function called without a receiver. It may need the global object
+   * as its receiver, so the context binds it to `globalThis`.
+   */
   callsHost: boolean;
   /** A global read under `typeof`, which must not throw when the global does not exist. */
   guarded: boolean;
@@ -72,6 +90,8 @@ export type LiftBlocker =
   | "a lifted name inside a nested function or class"
   | "a const enum"
   | "a declaration that reads unsettled names"
+  | "a direct eval"
+  | "calls a host function and reads it as a value"
   | "another escape";
 
 /**
@@ -131,10 +151,13 @@ export function tryLift(
 
   const lifted = new Map<string, Lifted>();
   const identifiers: TSESTree.Identifier[] = [];
+  // Globals read other than by calling them bare or under typeof, where a bound function would differ.
+  const readAsValues = new Set<string>();
   for (const reference of references) {
     const entry = classify(reference, site, assumptions);
     if (typeof entry === "string") return entry;
     if (!readsCoreThis(reference.identifier, fn)) return "a lifted name inside a nested function or class";
+    if (entry.global && !isBareCall(reference.identifier) && !entry.guarded) readAsValues.add(entry.name);
     const existing = lifted.get(entry.name);
     if (existing) {
       existing.writable ||= entry.writable;
@@ -145,6 +168,10 @@ export function tryLift(
       lifted.set(entry.name, entry);
     }
     identifiers.push(reference.identifier as TSESTree.Identifier);
+  }
+  // A bound function has none of the original's own properties, and isn't the same value.
+  if ([...lifted.values()].some((entry) => entry.callsHost && readAsValues.has(entry.name))) {
+    return "calls a host function and reads it as a value";
   }
   const direct = [...lifted.values()].every((entry) => entry.direct);
   // A function declaration can run before any statement of its module, a shared context's included.
@@ -345,6 +372,15 @@ function usesOwnReceiver(fn: FunctionNode, env: Environment): boolean {
   return found;
 }
 
+/** True when `identifier` is called without a receiver: `f()`, or a tagged template. */
+function isBareCall(identifier: TSESTree.Node): boolean {
+  const parent = identifier.parent;
+  return (
+    (parent?.type === AST_NODE_TYPES.CallExpression && parent.callee === identifier) ||
+    (parent?.type === AST_NODE_TYPES.TaggedTemplateExpression && parent.tag === identifier)
+  );
+}
+
 /** True when `this` at `node` would be the core's `this`: no function or class body in between rebinds it. */
 function readsCoreThis(node: TSESTree.Node, fn: FunctionNode): boolean {
   for (let ancestor = node.parent; ancestor && ancestor !== fn; ancestor = ancestor.parent) {
@@ -363,15 +399,16 @@ function classify(reference: Reference, site: LiftSite, assumptions: LiftAssumpt
   // No definition, or only `declare` statements describing it: a global.
   if (!variable || variable.defs.every(isAmbient)) {
     if (reference.isWrite()) return "writes a constant or import";
+    const called = isBareCall(identifier);
+    // A bare call to eval is a direct eval, which sees the caller's scope. Called through `this`, it wouldn't.
+    if (called && name === "eval") return "a direct eval";
     const parent = identifier.parent;
     return {
       name,
       global: true,
       writable: false,
       direct: false,
-      callsHost:
-        (parent.type === AST_NODE_TYPES.CallExpression && parent.callee === identifier) ||
-        (parent.type === AST_NODE_TYPES.TaggedTemplateExpression && parent.tag === identifier),
+      callsHost: called && !ECMASCRIPT_FUNCTIONS.has(name),
       guarded: parent.type === AST_NODE_TYPES.UnaryExpression && parent.operator === "typeof",
     };
   }

@@ -109,6 +109,8 @@ The fix only applies when the rewrite can't change behavior or types. It skips:
 - Functions that use their own `this`, `arguments`, `new.target` or `super`, or use `import.meta`, `import()` or JSX.
 - Functions that use a lifted name inside a nested `function` or class, where `this` means something else.
 - Writes to constants, imports and globals.
+- A direct call to `eval`, which sees the caller's scope. Called through `this`, it wouldn't.
+- A host function, such as `fetch`, called without a receiver and also read as a value, as in `fetch.name`. The call needs a bound function, which has none of the original's own properties, and isn't the same value.
 - Function declarations that read anything unsettled: named imports, module constants, globals or mutable state, like `report` above.
 - Named function expressions, declarations with several declarators, and variables with a type annotation, such as `const f: Handler = ...`, whose function takes its type from the annotation.
 - Functions inside other functions, blocks or classes.
@@ -123,7 +125,7 @@ The fix only applies when the rewrite can't change behavior or types. It skips:
 - **The stack has one more frame.** Code that finds its caller by counting frames, in the function or anything it calls, sees the wrapper.
 - **`toString()`** of the public function returns the wrapper. The body is in the hermetic function.
 - **Functions called through `this` receive it as their `this`.** The hermetic function calls `this.round(...)` where the original called `round(...)`, so `round` runs with the context object as `this` instead of `undefined`. Functions that ignore `this`, which is nearly all module functions, are unaffected.
-- **Global functions called without a receiver are bound to `globalThis`**, so that calls such as `this.fetch(url)` keep working. Each read returns a new bound function.
+- **Host functions called without a receiver are bound to `globalThis`**, so that calls such as `this.fetch(url)` keep working. Each read returns a new bound function. ECMAScript's own functions, such as `Number` and `parseInt`, ignore their receiver, so they're passed as they are.
 - **Async functions and generators** become plain functions that return the hermetic function's promise or iterator.
 - **Each call costs one more call and some property reads.** In microbenchmarks of Effect's hottest paths (collections, the fiber runtime, Schema decoding), the lifted library ran 25 to 73 percent slower. The cost is per call, so it matters where calls are cheap and frequent. [Unlifting](#unlifting-at-build-time) removes it from builds.
 - **Formatting and ordering.** The fix emits plain formatting, so run your formatter afterwards. The wrapper refers to its context object and hermetic function, which are declared after it, and `no-use-before-define` reports that unless its `functions` and `variables` options are off.

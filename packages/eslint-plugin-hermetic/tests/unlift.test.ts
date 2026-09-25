@@ -34,13 +34,13 @@ describe("unlift undoes the lift exactly", () => {
       `  return Math.round(amount);`,
       `}`,
     ].join("\n"),
-    "state, host functions and a guarded global, through a shared context": [
+    "state, host functions, built-ins and a guarded global, through a shared context": [
       `let calls = 0;`,
       `declare const hostFn: () => number;`,
       `export const probe = (n: number) => {`,
       `  calls += n;`,
       `  const seen = typeof window === "undefined" ? 0 : 1;`,
-      `  return [calls, hostFn(), seen, Date.now() > 0];`,
+      `  return [calls, hostFn(), seen, Date.now() > 0, Number(n), Number.isFinite(n)];`,
       `};`,
     ].join("\n"),
     "expression bodies with parentheses and comments": [

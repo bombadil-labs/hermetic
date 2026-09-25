@@ -33,7 +33,7 @@ import { analyze, createEnvironment, isAmbient } from "../packages/eslint-plugin
 import plugin from "../packages/eslint-plugin-hermetic/src/index.ts";
 import { planLift, tryLift } from "../packages/eslint-plugin-hermetic/src/lift.ts";
 import { unlift } from "../packages/eslint-plugin-hermetic/src/unlift.ts";
-import { functionName, isFunctionNode, isMarkedHermetic } from "../packages/eslint-plugin-hermetic/src/marking.ts";
+import { functionName, isFunctionNode, isMarkedHermetic, isMethod } from "../packages/eslint-plugin-hermetic/src/marking.ts";
 import { isCandidate } from "../packages/eslint-plugin-hermetic/src/rules/prefer-hermetic.ts";
 import { check } from "@bombadil/hermetic";
 
@@ -649,9 +649,11 @@ const LIBRARIES = [
 /** The functions the case studies show, as they were and as the fix leaves them. */
 const EXAMPLES = {
   effect: [
-    ["effect/src/Arbitrary.ts", "absurd"],
-    ["effect/src/internal/schedule/interval.ts", "after"],
+    ["effect/src/Predicate.ts", "isNullable"],
+    ["effect/src/Option.ts", "fromNullable"],
     ["effect/src/Array.ts", "tail"],
+    ["effect/src/internal/schedule/interval.ts", "after"],
+    ["effect/src/Arbitrary.ts", "absurd"],
     ["effect/src/internal/context.ts", "makeGenericTag"],
   ],
   rxjs: [
@@ -662,6 +664,7 @@ const EXAMPLES = {
   "tanstack-query": [
     ["@tanstack/query-core/src/utils.ts", "addToEnd"],
     ["@tanstack/query-core/src/utils.ts", "hashQueryKeyByOptions"],
+    ["@tanstack/query-core/src/utils.ts", "timeUntilStale"],
     ["@tanstack/react-query/src/errorBoundaryUtils.ts", "useClearResetErrorBoundary"],
     ["@tanstack/react-query/src/useQuery.ts", "useQuery"],
   ],
@@ -675,7 +678,8 @@ const libraryOf = (file) => LIBRARIES.find((library) => library.sources.some((so
  * records the kinds of names it reads, and whether it would lift if imports
  * counted as settled. An outermost function bound to no name, such as a
  * callback passed to another function, is not a candidate; it is recorded as
- * unnamed, with the function it is passed to.
+ * unnamed, with the function it is passed to. Nor is a method, which can't be
+ * hermetic yet; an outermost one is recorded as a method.
  */
 function censusRecords() {
   const records = [];
@@ -709,13 +713,14 @@ function censusRecords() {
             ":function"(node) {
               if (!isCandidate(node)) {
                 for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) if (isFunctionNode(ancestor)) return;
+                if (isMethod(node)) return void records.push({ file, name: functionName(node), line: node.loc.start.line, outcome: "method" });
                 const callee = node.parent.type === "CallExpression" ? node.parent.callee : undefined;
                 const passedTo = callee?.type === "Identifier" ? callee.name : callee?.type === "MemberExpression" && !callee.computed ? callee.property.name : undefined;
                 return void records.push({ file, line: node.loc.start.line, outcome: "unnamed", passedTo });
               }
               if (isMarkedHermetic(node, context.sourceCode)) return;
               const problems = analyze(node, functionName(node), env);
-              const member = ["Property", "MethodDefinition", "PropertyDefinition"].includes(node.parent.type);
+              const member = node.parent.type === "Property";
               const record = { file, name: functionName(node), line: node.loc.start.line, member };
               if (problems.length === 0) return void records.push({ ...record, outcome: "hermetic" });
               const result = tryLift(node, problems, env);
@@ -814,7 +819,8 @@ function runReport() {
       name: library.name,
       packages: library.packages.map((name) => ({ name, version: PACKAGES[name] })),
       files: fixedFiles.length,
-      candidates: count((r) => r.outcome !== "unnamed"),
+      candidates: count((r) => r.outcome !== "unnamed" && r.outcome !== "method"),
+      methods: count((r) => r.outcome === "method"),
       hermetic: count((r) => r.outcome === "hermetic"),
       hermeticMembers: count((r) => r.outcome === "hermetic" && r.member),
       direct: count((r) => r.outcome === "direct"),

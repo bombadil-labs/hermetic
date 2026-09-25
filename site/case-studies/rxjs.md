@@ -7,7 +7,7 @@ description: What prefer-hermetic did to RxJS {{rxjs.version}}, and why it skipp
 
 <p class="lede">RxJS is a library for reactive programming with observables. The lift rewrote {{rxjs.lifted}} of its {{rxjs.candidates}} functions and skipped {{rxjs.skipped}}. This case study is mostly about the skipped ones: why the lift won't rewrite a function unless it can prove the rewrite is safe, and what that costs.</p>
 
-It covers the TypeScript source that RxJS {{rxjs.version}} publishes to npm: {{rxjs.files}} files and {{rxjs.candidates}} candidate functions.
+It covers the TypeScript source that RxJS {{rxjs.version}} publishes to npm: {{rxjs.files}} files and {{rxjs.candidates}} candidate functions, not counting the {{rxjs.methods}} methods of its classes. A method's `this` is its object, not its inputs, so methods can't be hermetic yet.
 
 ## Results
 
@@ -21,15 +21,17 @@ It covers the TypeScript source that RxJS {{rxjs.version}} publishes to npm: {{r
 
 ## Already hermetic
 
-{{rxjs.hermeticMembers}} of the {{rxjs.hermetic}} functions that were already hermetic are methods of RxJS's classes. `Subscriber._next` forwards to `this.destination`, and methods like `Observable._subscribe` and `ReplaySubject._trimBuffer` read nothing but `this` and their arguments. For a method, `this` is an input like any other, so the rule allows it. Most of the rest are small utilities:
+The {{rxjs.hermetic}} functions that were already hermetic are small utilities:
 
 <!-- example rxjs/src/internal/util/isFunction.ts#isFunction -->
 
 ## Lifted
 
-All {{rxjs.lifted}} lifted functions pass their values directly. They include `pipe`, the notification factories, helpers in `ajax`, and `operate`, the helper that `map`, `filter` and many other operators are built on.
+All {{rxjs.lifted}} lifted functions pass their values directly: `pipe`, the notification factories, three type checks in `ajax`, and `popNumber`.
 
 <!-- example rxjs/src/internal/util/pipe.ts#pipe -->
+
+`operate`, the helper that `map`, `filter` and many other operators are built on, isn't among them. It throws a `TypeError` when it's given an unknown kind of observable, and `TypeError` is a global, which the lift never treats as settled, since a global can be missing or replaced. `operate` is a function declaration, so it's skipped, for the reason the next section explains.
 
 ## The operators
 
@@ -51,7 +53,7 @@ The plugin doesn't offer that option yet. RxJS is the clearest case for adding i
 
 <!-- reasons rxjs -->
 
-After the operators, the largest group is **methods and object members**. The lift only rewrites functions declared at the top level of a module, because a method already uses `this` for the object it's called on.
+After the operators, the groups are small. `first`, `last`, `reduce`, `scan` and a few others use `arguments` to tell whether an optional argument was passed, and a lifted function's `arguments` would be different, so the lift skips them.
 
 ## Verification
 

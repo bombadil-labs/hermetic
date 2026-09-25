@@ -173,7 +173,7 @@ area.call(harden({ width: 2, height: 3 }));</pre>
           <pre data-lang="sh">npx eslint --fix --rule '{"hermetic/prefer-hermetic": ["warn", {"lift": true}]}' src/</pre>
           <!-- example @tanstack/query-core/src/utils.ts#hashQueryKeyByOptions -->
           <div class="stats">
-            <div class="stat"><span class="value">{{total.candidates}}</span><span class="label">named functions across Effect, RxJS and TanStack Query</span></div>
+            <div class="stat"><span class="value">{{total.candidates}}</span><span class="label">named functions across Effect, RxJS and TanStack Query, not counting methods</span></div>
             <div class="stat"><span class="value">{{total.hermeticPct}}</span><span class="label">already hermetic, so only marked</span></div>
             <div class="stat"><span class="value">{{total.liftedPct}}</span><span class="label">lifted</span></div>
             <div class="stat"><span class="value">{{total.typeErrorsIntroduced}}</span><span class="label">new type errors</span></div>

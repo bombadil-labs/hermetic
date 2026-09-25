@@ -243,14 +243,15 @@ function header(base, current) {
   const links = CASE_STUDIES.map(
     (study) => `<a href="${base}case-studies/${study.id}.html"${study.id === current ? ' aria-current="page"' : ""}>${study.title}</a>`,
   );
-  return `<header class="site-header"><div class="wrap"><a class="brand" href="${base}index.html">${LOGO}hermetic</a><nav class="site-nav" aria-label="Site">${links.join("")}<a href="${REPOSITORY}">GitHub</a></nav></div></header>`;
+  const notice = `<div class="notice"><div class="wrap"><strong>Under development.</strong> These pages describe hermetic 0.3.0, which isn't released yet.</div></div>`;
+  return `<header class="site-header"><div class="wrap"><a class="brand" href="${base}index.html">${LOGO}hermetic</a><nav class="site-nav" aria-label="Site">${links.join("")}<a href="${REPOSITORY}">GitHub</a></nav></div></header>${notice}`;
 }
 
 function footer() {
   return [
     `<footer class="site-footer"><div class="wrap">`,
     `<span>MIT licensed. Every number comes from <code>npm run corpus</code> at <a href="${REPOSITORY}/commit/${escape(data.generated.commit)}">${escape(data.generated.commit)}</a>${data.generated.dirty ? " with uncommitted changes" : ""}, ${escape(data.generated.date.slice(0, 10))}.</span>`,
-    `<span><a href="${REPOSITORY}">GitHub</a> · <a href="https://www.npmjs.com/package/@bombadil/eslint-plugin-hermetic">npm: plugin</a> · <a href="https://www.npmjs.com/package/@bombadil/hermetic">runtime</a></span>`,
+    `<span><a href="${REPOSITORY}">GitHub</a></span>`,
     `</div></footer>`,
     `<script>for (const button of document.querySelectorAll("[data-copy]")) button.addEventListener("click", () => navigator.clipboard?.writeText(button.dataset.copy).then(() => { button.textContent = "Copied"; setTimeout(() => (button.textContent = "Copy"), 1500); }));</script>`,
   ].join("");

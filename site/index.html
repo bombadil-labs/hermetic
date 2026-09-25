@@ -25,7 +25,6 @@
             to be passed in, so all of its dependencies are visible in its inputs.
           </p>
           <div class="actions">
-            <span class="install"><code>npm install --save-dev @bombadil/eslint-plugin-hermetic</code><button type="button" data-copy="npm install --save-dev @bombadil/eslint-plugin-hermetic">Copy</button></span>
             <a class="button primary" href="#case-studies">Read the case studies</a>
             <a class="button" href="https://github.com/bombadil-labs/hermetic">GitHub</a>
           </div>
@@ -142,7 +141,6 @@ export const applyPricing = applyDiscount.bind(pricing);</pre>
             </p>
           </div>
           <div>
-            <pre data-lang="sh">npm install @bombadil/hermetic</pre>
             <pre data-lang="ts">import "ses";
 lockdown(); // once, at startup: the application's decision
 
@@ -240,38 +238,21 @@ area.call(harden({ width: 2, height: 3 }));</pre>
       </section>
 
       <section>
-        <div class="wrap split">
+        <div class="wrap">
           <div class="prose">
-            <h2>Get started</h2>
+            <h2>Documentation</h2>
             <p>
-              Install the plugin next to <code>typescript-eslint</code> and add the recommended config. Mark a function with a
-              <code>"use hermetic"</code> directive or an <code>@hermetic</code> JSDoc tag. The rule only checks marked
-              functions, so turning it on doesn't affect the rest of your code.
+              hermetic is under development, and version 0.3.0 isn't released yet. A function is marked hermetic with a
+              <code>"use hermetic"</code> directive or an <code>@hermetic</code> JSDoc tag, and <code>hermetic/sealed</code>
+              checks only the functions that are marked.
             </p>
             <p>
-              Documentation:
+              The documentation is on GitHub:
               <a href="https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/sealed.md">hermetic/sealed</a>,
               <a href="https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/prefer-hermetic.md">hermetic/prefer-hermetic</a>,
               <a href="https://github.com/bombadil-labs/hermetic/tree/main/packages/eslint-plugin-hermetic#built-ins-come-in-through-this">passing built-ins in</a>,
               and <a href="https://github.com/bombadil-labs/hermetic/tree/main/packages/hermetic#readme">check and confine</a>.
             </p>
-            <p>
-              Up to 0.2.0, the plugin was published as <code>@bombadil/hermetic</code>, which is now the runtime package. If
-              your config imports it, install <code>@bombadil/eslint-plugin-hermetic</code> and change the import. From 0.3.0,
-              hermetic functions read no globals, so the <code>ground</code> and <code>aliasing</code> settings are gone, and
-              methods can't be hermetic yet.
-            </p>
-          </div>
-          <div>
-            <pre data-lang="js">// eslint.config.js
-import { defineConfig } from "eslint/config";
-import tseslint from "typescript-eslint";
-import hermetic from "@bombadil/eslint-plugin-hermetic";
-
-export default defineConfig(
-  ...tseslint.configs.recommended,
-  hermetic.configs.recommended,
-);</pre>
           </div>
         </div>
       </section>

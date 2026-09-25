@@ -138,7 +138,7 @@ export const applyPricing = applyDiscount.bind(pricing);</pre>
               The checker is hermetic itself. Its parser comes in through <code>this</code>, and it reads no globals, so its
               own source can be sent to another runtime and bound there, and it passes its own check.
               <a href="https://github.com/bombadil-labs/hermetic/tree/main/packages/hermetic#readme">The package's README</a>
-              covers both functions.
+              covers <code>check</code>, <code>confine</code> and <code>intrinsics</code>.
             </p>
           </div>
           <div>

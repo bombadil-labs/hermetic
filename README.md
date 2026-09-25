@@ -1,22 +1,39 @@
 # hermetic
 
-**A hermetic function depends only on what it is handed: its arguments, `this`, and a small, explicitly configured *ground* of harmless globals.** The name comes from hermetic builds, which depend only on their declared inputs, and that is what makes them cacheable and runnable anywhere. A hermetic function is not a pure function. It may mutate and cause effects, but only through what it was handed. This plugin enforces the idea with `hermetic/sealed`, and `hermetic/prefer-hermetic` finds the functions to mark, or splits them so that they can be.
+**A hermetic function reads nothing but its inputs: its arguments, including `this`, and a short list of allowed globals.** It doesn't use imports, module-level variables, or globals like `fetch` and `Date`; anything else it needs has to be passed in. `hermetic/sealed` checks the functions you mark as hermetic, and `hermetic/prefer-hermetic` finds functions that already are, and rewrites others so they can be. The name comes from hermetic builds, which likewise depend only on their declared inputs.
 
 ```ts
-function applyDiscount(this: PricingCtx, invoice: Invoice): Invoice {
+function applyDiscount(this: Pricing, invoice: Invoice) {
   "use hermetic";
-  return { ...invoice, total: this.clamp(invoice.total * (1 - this.rate)) };
+  const discounted = invoice.total * (1 - this.rate);
+  return { ...invoice, total: this.clamp(discounted) };
 }
+
+// Supply the dependencies once, by binding this.
+const pricing = { rate: config.rate, clamp: toCents };
+export const applyPricing = applyDiscount.bind(pricing);
 ```
 
-Purity is unenforceable in JavaScript: any argument can be a Proxy, or carry a getter that does I/O. Hermeticity is decidable. "No free variables" is a syntactic check that ESLint's scope analysis already computes. So a codebase can put as much logic as possible into hermetic functions, and grant authority in a thin binding layer where `this` and arguments are applied.
+Every value a function reads is one of its inputs, whether or not it appears in the parameter list. A function that reads a module-level variable has an input its signature doesn't show. In a hermetic function, every input is an argument, apart from the allowed globals. `this` counts as an argument: an implicit first one, which `.call` passes explicitly and `.bind` fixes in advance. Binding `this` is partial application, which makes `this` a convenient place for dependencies. The essay [Thinking Like a Function](https://myk.pub/thinking-like-a-function-16) explains this way of looking at functions.
 
-A hermetic function's whole world arrives through two doors, so anything standing at those doors sees everything:
+Hermetic doesn't mean pure. A hermetic function can change its inputs, or call methods on them that do I/O. Purity can't be checked in JavaScript, because any input can be a Proxy. Whether a function reads anything besides its inputs can be checked, with the same scope analysis ESLint uses to find undefined variables.
 
-- **Relocation.** A hermetic function can move to another file, worker or realm unchanged. The acid test: `new Function("return " + fn.toString())()` behaves identically to `fn`. This repository's tests run that test on the examples.
-- **Mocking, tracing, record/replay.** Wrap `this` in a Proxy and you log every use of the authority the function was granted, with no instrumentation inside it.
-- **Authority audits.** Every grant lives in the binding layer, so "what can touch Stripe?" is answered by reading the wiring.
-- **Context-complete units.** Arguments, `this` type and body are everything an agent or reviewer needs to edit the function. The rule guards generated code as well as handwritten code.
+What you get:
+
+- **Portable code.** The function's source is all of its behavior, so it runs the same in another file, a worker or a sandbox: `new Function("return " + fn.toString())()` behaves exactly like `fn`. This repository's tests check that on the examples.
+- **Tests without module mocks.** Pass test values as inputs. Wrap `this` in a Proxy to record every use of the dependencies the function was given.
+- **Dependencies you can find.** To find out which functions can call Stripe, look at the code that passes the Stripe client in.
+- **Self-contained changes.** A function's inputs, the type of `this` and its body are everything a person or an agent needs to read before changing it. The rule checks generated code the same way as handwritten code.
+
+## Terms
+
+- **Inputs**: a function's arguments, including `this`. `this` is an implicit first argument: `.call` passes it explicitly, and `.bind` fixes it in advance.
+- **Hidden input**: a value a function reads that isn't one of its inputs, such as an import, a module-level variable or a global. `hermetic/sealed` reports hidden inputs in hermetic functions.
+- **Allowed globals**: the globals a hermetic function may read by name, such as `Math` and `JSON`. A bootstrap file chooses them; its setting is called `ground`.
+- **Lift**: the `lift` fix of `hermetic/prefer-hermetic`. It moves a function's body into a new hermetic function that receives the function's hidden inputs through `this`, and turns the original function into a wrapper.
+- **Wrapper**: the original function after a lift. It keeps its name, signature and export, and calls the hermetic function with the values it needs.
+- **Settled**: a module-level name that is initialized before a wrapper can run, and never reassigned. A wrapper passes settled values directly, and everything else through a shared context object.
+- **Unlift**: the exact inverse of the lift. It turns each wrapper back into the original function.
 
 ## Install
 
@@ -38,12 +55,12 @@ export default defineConfig(
 );
 ```
 
-`hermetic/sealed` checks only functions marked hermetic, so enabling it everywhere is safe. Both rules also work on plain JavaScript through ESLint's default parser.
+`hermetic/sealed` only checks functions marked hermetic, so turning it on doesn't affect the rest of your code. Both rules also work on plain JavaScript through ESLint's default parser.
 
 | Rule | What it does | Fix |
 | --- | --- | --- |
-| [`hermetic/sealed`](docs/rules/sealed.md) | Reports everything a marked function reaches outside itself. In the recommended config. | |
-| [`hermetic/prefer-hermetic`](docs/rules/prefer-hermetic.md) | Reports functions that are already hermetic, and with `lift`, functions that can be split into a hermetic core and a binding. | Marks, or splits in place |
+| [`hermetic/sealed`](docs/rules/sealed.md) | Reports the hidden inputs of functions marked hermetic. In the recommended config. | |
+| [`hermetic/prefer-hermetic`](docs/rules/prefer-hermetic.md) | Reports functions that are already hermetic, and with `lift`, functions it can rewrite to be hermetic. | Marks, or lifts |
 
 ## Marking a function
 
@@ -56,9 +73,9 @@ function total(invoices: Invoice[]) {
 }
 ```
 
-The directive survives TypeScript and esbuild, and appears in `fn.toString()`, so runtime tools can recognize hermetic functions without a registry. **terser strips unknown directives by default.** Set `compress: { directives: false }` if production code needs to keep them.
+The directive survives TypeScript and esbuild, and appears in `fn.toString()`, so tools can recognize hermetic functions at runtime without a registry. **terser strips unknown directives by default.** Set `compress: { directives: false }` if production code needs to keep them.
 
-A JSDoc `@hermetic` tag at the start of a line also marks a function. It works on expression-bodied arrows, which cannot hold a directive, but it does not reach runtime:
+A JSDoc `@hermetic` tag at the start of a line also marks a function. It works on arrow functions with an expression body, which can't hold a directive, but it isn't visible at runtime:
 
 ```ts
 /** @hermetic */
@@ -69,30 +86,30 @@ Both forms apply to function declarations, function expressions, arrow functions
 
 ## What the rule reports
 
-`hermetic/sealed` reports every reference that escapes a marked function and is not in the ground, plus the syntactic escapes that scope analysis cannot see:
+`hermetic/sealed` reports every hidden input of a marked function: each name it uses that isn't declared inside it and isn't an allowed global. It also reports the forms that scope analysis can't see:
 
 | Reported | Example | Why |
 | --- | --- | --- |
-| Free variables | `return a * RATE;` | A hidden input. Includes imports, other hermetic functions, and `typeof window`. |
-| Ground names bound locally | `import { JSON } from "./json"` | The name refers to your binding, not the global. |
-| Assignments to ground names | `Math = …` | The ground is readable, not reassignable. |
-| Denied member paths | `Math.random()`, `const { random } = Math` | Denied by the ground. See [the ground](#the-ground). |
-| `this` or `new.target` in a hermetic arrow | `() => { "use hermetic"; return this.x; }` | Arrow `this` is lexical, so it comes from outside. |
-| `super` | `super.method()` | It reaches the enclosing home object. |
-| `import.meta`, `import()` | `import.meta.url` | Module scope, and code loading. |
-| JSX | `return <div />;` | Compiles to a call to the JSX factory, which is a free variable. |
+| Free variables | `return a * RATE;` | A hidden input. This includes imports, other hermetic functions, and `typeof window`. |
+| Allowed globals shadowed by a local | `import { JSON } from "./json"` | The name refers to your variable, not the global. |
+| Assignments to allowed globals | `Math = …` | Allowed globals can be read, not reassigned. |
+| Denied members | `Math.random()`, `const { random } = Math` | The member isn't allowed. See [allowed globals](#allowed-globals). |
+| `this` or `new.target` in a hermetic arrow function | `() => { "use hermetic"; return this.x; }` | An arrow function's `this` comes from the enclosing scope, not from its inputs. |
+| `super` | `super.method()` | It refers to the enclosing class or object. |
+| `import.meta`, `import()` | `import.meta.url` | They refer to the enclosing module, or load code. |
+| JSX | `return <div />;` | It compiles to a call to the JSX factory, which is a free variable. |
 
-The diagnostic says what to do:
+The message says what to do:
 
 ```
 'taxRate' is a free variable in hermetic function 'applyDiscount'. Pass it through 'this' or an argument.
 ```
 
-**Allowed:** parameters, locals, `arguments`, `this` in non-arrow functions, literals, ground names and member access on them, calling a callback passed in as an argument (the authority was handed over), and a function declaration calling itself by name. The last one survives relocation because the round trip turns the declaration into a named function expression, which binds its own name. Reassign the binding and it is reported again.
+**Allowed:** parameters, local variables, `arguments`, `this` in functions other than arrow functions, literals, allowed globals and their members, calling a callback passed in as an argument, and a function declaration calling itself by name. The last one still works after the function is moved, because re-evaluating its source turns the declaration into a named function expression, which binds its own name. If the name is reassigned, the call is reported again.
 
-Nested functions may close over the hermetic function's own locals. Only references that escape the marked function are checked.
+Nested functions may use the hermetic function's own local variables. Only names from outside the marked function are checked.
 
-**Hermeticity is not transitive.** A call to another hermetic function is still a free variable. Compose through `this`:
+**Calling another hermetic function by name is still a hidden input.** Pass it in, usually through `this`:
 
 ```ts
 export function checkout(this: { price: (invoice: Invoice) => Invoice }, invoices: Invoice[]) {
@@ -101,27 +118,27 @@ export function checkout(this: { price: (invoice: Invoice) => Invoice }, invoice
 }
 ```
 
-## The ground
+## Allowed globals
 
-The ground is the set of global names a hermetic function may assume, plus denied member paths inside them. The default:
+The allowed globals are the global names a hermetic function may read, except for any denied members inside them. The default list:
 
-| Category | Included | Excluded, and why |
+| Category | Allowed | Not allowed, and why |
 | --- | --- | --- |
-| Value globals | `undefined`, `NaN`, `Infinity` | |
+| Values | `undefined`, `NaN`, `Infinity` | |
 | Data structures | `Array`, `Object`, `Map`, `Set`, `WeakMap`, `WeakSet`, `Symbol` | |
 | Primitives | `Number`, `String`, `Boolean`, `BigInt`, `parseInt`, `parseFloat`, `isNaN`, `isFinite` | |
 | Structured data | `JSON`, `RegExp`, `Promise`, the error constructors | |
 | Math | `Math` | `Math.random` (nondeterministic) |
 | Time | | `Date` (reads the clock) |
-| Ambient authority | | `fetch`, `crypto`, `console`, timers, `process`, `globalThis`, `window`, `document` |
+| I/O and host access | | `fetch`, `crypto`, `console`, timers, `process`, `globalThis`, `window`, `document` |
 | Code loading | | `eval`, `Function` |
-| Locale | | `Intl` (depends on host locale) |
+| Locale | | `Intl` (depends on the host's locale) |
 
-Anything not listed is excluded, including deterministic intrinsics such as `Reflect`, typed arrays and `encodeURIComponent`. Add what you need in a bootstrap.
+Anything not listed isn't allowed, including deterministic built-ins such as `Reflect`, typed arrays and `encodeURIComponent`. Add what you need in a bootstrap.
 
-### Configuring the ground with a bootstrap
+### Choosing the allowed globals with a bootstrap
 
-The ground is defined in code by a hermetic function that receives a realm and returns `{ allow, deny }`:
+The allowed globals are defined in code, by a hermetic function that receives a realm and returns `{ allow, deny }`:
 
 ```ts
 // hermetic.ground.ts
@@ -142,24 +159,24 @@ hermetic.configs.recommended,
 
 The plugin loads it in three steps:
 
-1. It lints the bootstrap with the rule itself, on the default ground, and refuses to load it unless it is marked hermetic and passes. Suppression comments are ignored here.
-2. It erases the function's TypeScript syntax and evaluates its source text alone, in a fresh `node:vm` context with string compilation disabled and a one-second timeout. The lint is what makes this reasonable: the function touches nothing but the realm it is handed. A vm context is not a security boundary.
-3. It reads the keys of `allow` and the paths in `deny`. Only keys matter to the linter.
+1. It lints the bootstrap with `hermetic/sealed`, using the default allowed globals, and refuses to load it unless it is marked hermetic and passes. Suppression comments are ignored here.
+2. It erases the function's TypeScript syntax and evaluates its source text on its own, in a fresh `node:vm` context with string compilation disabled and a one-second timeout. The lint is what makes this reasonable: the function reads nothing but the realm passed to it. A vm context is not a security boundary.
+3. It reads the keys of `allow` and the paths in `deny`. Only the keys matter to the linter.
 
-The bootstrap is found as the export named `ground`, or else the default export. It may use TypeScript syntax that erases cleanly: annotations, `as`, `satisfies`, `!`, generics and local type declarations. Erasure keeps every line and column in place, so errors point into your file. Syntax that needs a compiler, such as enums and namespaces, is refused. [`examples/hermetic.ground.ts`](examples/hermetic.ground.ts) spells out the default ground, as a starting point to copy.
+The bootstrap is the export named `ground`, or else the default export. It may use TypeScript syntax that erases cleanly: annotations, `as`, `satisfies`, `!`, generics and local type declarations. Erasure keeps every line and column in place, so errors point into your file. Syntax that needs a compiler, such as enums and namespaces, is refused. [`examples/hermetic.ground.ts`](examples/hermetic.ground.ts) spells out the default list, as a starting point to copy.
 
-The same file can serve at runtime. The entry point calls `ground(globalThis)`, for example to build Compartment globals, so lint time and runtime share one definition of the ground. **Keep it a literal list.** At lint time, `realm` is a bare JavaScript realm, so a bootstrap that enumerates `realm` would see different names than it sees at runtime.
+The same file can be used at runtime. An entry point can call `ground(globalThis)`, for example to build the globals of a Hardened JS Compartment, so the linter and the runtime share one list. **Keep it a literal list.** At lint time, `realm` is a bare JavaScript realm, so a bootstrap that enumerates `realm` would see different names than it sees at runtime.
 
-ESLint's `--cache` does not know about the bootstrap. Clear the cache after changing it.
+ESLint's `--cache` doesn't know about the bootstrap. Clear the cache after changing it.
 
-### Denied paths and aliasing
+### Denied members and aliasing
 
-Denied paths are checked through static member access (`Math.random`, `Math["random"]`, `Math?.random`, `(Math as any).random`) and destructuring (`const { random } = Math`, including nested patterns and parameter defaults).
+Denied members are checked through static member access (`Math.random`, `Math["random"]`, `Math?.random`, `(Math as any).random`) and destructuring (`const { random } = Math`, including nested patterns and parameter defaults).
 
-Statically, they are best effort. `const m = Math; m.random()` evades the check. There are two ways to close the gap:
+The check is best effort: `const m = Math; m.random()` gets past it. There are two ways to close the gap:
 
-- Set `aliasing: "forbid"`. A ground object with denied members may then only be used in place: static member access, destructuring, `typeof`, calling or constructing it, and comparisons. Anything that could hand it elsewhere, such as `const m = Math`, `Math[key]` or `f(Math)`, is reported.
-- Leave the whole object out of the ground, and inject what you need through `this`.
+- Set `aliasing: "forbid"`. An allowed global with denied members may then only be used in place: static member access, destructuring, `typeof`, calling or constructing it, and comparisons. Anything that could pass it elsewhere, such as `const m = Math`, `Math[key]` or `f(Math)`, is reported.
+- Leave the whole object out of the allowed globals, and pass what you need through `this`.
 
 ## Options
 
@@ -179,26 +196,25 @@ Both rules take these options, and both read them from `settings.hermetic` as we
 ```
 
 - **`types`**. Type-only references are erased at runtime, so `"allow"` permits them, including `typeof x` in type positions. `"structural-only"` reports type references that resolve to a declaration outside the function, such as imports and module-level interfaces and aliases, so the function can move across files unchanged. TypeScript's lib types and other global types stay allowed.
-- **`ground`**. See [the ground](#the-ground).
-- **`aliasing`**. See [denied paths and aliasing](#denied-paths-and-aliasing).
+- **`ground`**. The bootstrap that chooses the allowed globals. See [allowed globals](#allowed-globals).
+- **`aliasing`**. See [denied members and aliasing](#denied-members-and-aliasing).
 
-## The binding layer
+## Binding `this`
 
-TypeScript already types the binding. A `this` parameter is checked at every `.call`, `.apply` and `.bind`:
+TypeScript type-checks the value of `this` in every `.call`, `.apply` and `.bind`:
 
 ```ts
-// binding layer: ordinary code, and the only place authority is granted
-const pricing: PricingCtx = { rate: config.discountRate, clamp: clampToCents };
+const pricing: Pricing = { rate: config.discountRate, clamp: clampToCents };
 export const applyPricing = applyDiscount.bind(pricing); // (invoice: Invoice) => Invoice
 ```
 
-`ThisParameterType<F>` extracts a context type, and `OmitThisParameter<F>` gives the bound signature. With `types: "structural-only"`, write the context type inline on the function and name it in the binding layer with `ThisParameterType<typeof applyDiscount>`. The function stays the source of truth for the authority it needs.
+`ThisParameterType<F>` extracts the type of `this`, and `OmitThisParameter<F>` gives the signature after binding. With `types: "structural-only"`, write the type of `this` inline on the function, and name it where you bind it with `ThisParameterType<typeof applyDiscount>`. That way the function stays the source of truth for what it needs.
 
 See [`examples/pricing.ts`](examples/pricing.ts) for a complete example.
 
 ## Making a codebase hermetic
 
-`hermetic/prefer-hermetic` finds the functions that are hermetic already and marks them. With `lift`, it also splits functions whose only outside inputs are module bindings and globals: the body moves into a hermetic core, and the original name becomes a binding that hands the core those inputs.
+`hermetic/prefer-hermetic` finds functions that are already hermetic and marks them. With `lift`, it also rewrites functions whose hidden inputs are all module-level values or globals: the body moves into a new hermetic function that receives them through `this`, and the original function becomes a wrapper that passes them in.
 
 ```ts
 // before
@@ -213,30 +229,30 @@ function discountHermetic(this: { toCents: typeof toCents }, dollars: number, ra
 }
 ```
 
-The generated binding is the degenerate binding layer: it grants exactly what the function used to take from its surroundings. Callers do not change, and from there you can narrow the grants by hand. One command does the whole codebase:
+The wrapper passes exactly what the function used to read from its surroundings. Callers don't change, and you can narrow what is passed in by hand afterwards. One command does the whole codebase:
 
 ```sh
 npx eslint --fix --rule '{"hermetic/prefer-hermetic": ["warn", {"lift": true}]}' src/
 ```
 
-The fix applies only where the split preserves behavior and types, and leaves the rest for a person. On Effect, RxJS and TanStack Query, it marked 22.8% of 5,315 candidate functions and lifted 46.1%, the fixed code type-checks with no new errors, and Effect's own 6,233 tests pass on its lifted source. The [case studies](https://bombadil-labs.github.io/hermetic/) go through each library: what was marked, lifted and left alone, and why. The [rule's documentation](docs/rules/prefer-hermetic.md) lists what it skips, what changes (a stack frame, `toString`, a per-call cost), and how it decides.
+The fix only rewrites a function when the rewrite can't change its behavior or types, and leaves every other function as it was. On Effect, RxJS and TanStack Query, it marked 22.8% of 5,315 candidate functions and lifted 46.1%; the fixed code type-checks with no new errors, and Effect's own 6,233 tests pass on its lifted source. The [case studies](https://bombadil-labs.github.io/hermetic/) go through each library: what was marked, lifted and skipped, and why. The [rule's documentation](docs/rules/prefer-hermetic.md) lists what it skips, what changes (a stack frame, `toString`, a per-call cost), and how it decides.
 
-The lift also has an exact inverse, `unlift`, which folds each binding back into the function it came from. Hermeticity can then work like types: checked in the source, erased in the build. On the corpus, unlifting the lifted code gives back the original program in every file, and Effect's benchmarks go from 25–73% slower when lifted to within noise of the original when unlifted. A bundler plugin that applies it to production builds is next; see [unlifting at build time](docs/rules/prefer-hermetic.md#unlifting-at-build-time).
+The lift has an exact inverse, `unlift`, which turns each wrapper back into the original function, so the source can stay hermetic while a build runs the original code. On the corpus, unlifting the lifted code gives back the original program in every file, and Effect's benchmarks go from 25–73% slower when lifted to within noise of the original when unlifted. `unlift` isn't part of the published package yet; a bundler plugin that runs it on production builds is next. See [unlifting at build time](docs/rules/prefer-hermetic.md#unlifting-at-build-time).
 
-## What hermeticity does not give you
+## What hermetic functions don't give you
 
-- **Purity.** A hermetic function can still do anything its arguments and `this` allow, and any of them can be a Proxy.
-- **Confinement.** Intrinsics are reachable from literals: `[].constructor.constructor("return globalThis")()` reaches `Function`, and through it the global object, without a single free variable. Built-in prototypes are shared and mutable. The rule guards authors against accidental ambient dependencies. It does not sandbox code you did not write. That takes runtime enforcement, such as Hardened JS (`lockdown()`) with Compartments built from the same bootstrap.
-- **Determinism by itself.** A hermetic function sees only its arguments, `this` and the ground, so, like a hermetic build, it behaves the same whenever those do. Hand it a clock or a random source through `this` and its results vary, but visibly, through a door you can watch. That is what makes record and replay possible.
-- **Complete deny paths**, unless `aliasing: "forbid"` is set. See above.
+- **Purity.** A hermetic function can do anything its inputs allow, and any input can be a Proxy.
+- **A sandbox.** Every value, even a literal, is connected to the program's shared built-ins through its prototype chain. A hermetic function can change them, as in `({}).__proto__.hasOwnProperty = () => true`, which changes `hasOwnProperty` for every object in the program, or reach the global object with `[].constructor.constructor("return globalThis")()`. The rule checks names, and these reach the built-ins through values. ESLint's own `no-proto` and `no-extend-native` rules catch the direct spellings, but not computed keys or `Object.getPrototypeOf`. For code you don't trust, use [Hardened JS](https://hardenedjs.org/): `lockdown()` freezes the shared built-ins, so writes like these fail, and a Compartment gives the code its own global object, holding only the globals you give it. Those can come from the same bootstrap.
+- **Determinism by itself.** A hermetic function sees only its inputs and the allowed globals, so, like a hermetic build, it behaves the same whenever those are the same. Pass it a clock or a random source and its results vary, but through an input you can see and replace. That is what makes record and replay possible.
+- **Complete denied members**, unless `aliasing: "forbid"` is set. See above.
 
 ## Status
 
 | Milestone | Scope | State |
 | --- | --- | --- |
-| M1 | Core rule, static default ground, directive and JSDoc marking | Done |
-| M2 | Bootstrap-configured ground via `node:vm`, self-linted before evaluation | Done |
-| M3 | Denied member paths | Done |
+| M1 | Core rule, default allowed globals, directive and JSDoc marking | Done |
+| M2 | Allowed globals chosen by a bootstrap, run in `node:vm` after the rule lints it | Done |
+| M3 | Denied members | Done |
 | M4 | Doctest harness with the `toString` round trip | Next |
 | M5 | Recording Proxy for `this`, replaying a captured call as a test | Next |
 | | `hermetic/prefer-hermetic`: marking and lift fixes, validated on a corpus | Done |
@@ -258,7 +274,7 @@ npm run corpus   # census, stress, fix and round trip on pinned open-source pack
 
 Releases are published to npm from GitHub releases. [RELEASING.md](RELEASING.md) covers the one-time setup and each release.
 
-Development needs Node 22.18 or later, because `eslint.config.js` loads the plugin's TypeScript source directly. The repository lints itself with the rule. The plugin's own pure helpers, such as the ground functions in [`src/ground/ground.ts`](src/ground/ground.ts), are marked `"use hermetic"`.
+Development needs Node 22.18 or later, because `eslint.config.js` loads the plugin's TypeScript source directly. The repository lints itself with the rule: the plugin's own hermetic helpers, such as the functions in [`src/ground/ground.ts`](src/ground/ground.ts), are marked `"use hermetic"`.
 
 ## License
 

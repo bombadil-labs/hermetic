@@ -1,6 +1,6 @@
 /**
- * The pricing example from the spec: business logic in hermetic functions,
- * authority granted in a thin binding layer.
+ * The pricing example: business logic in hermetic functions, with their
+ * dependencies supplied by binding `this`.
  */
 
 export interface Invoice {
@@ -8,7 +8,7 @@ export interface Invoice {
   readonly total: number;
 }
 
-/** Exactly the authority pricing needs. */
+/** Exactly the dependencies pricing needs. */
 export interface PricingCtx {
   readonly rate: number;
   readonly clamp: (n: number) => number;
@@ -31,9 +31,9 @@ export function checkout(this: { price: (invoice: Invoice) => Invoice }, invoice
   return invoices.map((invoice) => this.price(invoice).total).reduce((sum, total) => sum + total, 0);
 }
 
-// Binding layer: ordinary code, and the only place authority is granted.
-// It builds `this` objects and binds them, composing hermetic functions by
-// placing bound ones into other contexts.
+// Supplying dependencies: ordinary code that builds `this` objects and binds
+// them. Hermetic functions compose by passing bound ones into other `this`
+// objects.
 
 export function bindPricing(config: { readonly discountRate: number }) {
   const pricing: PricingCtx = { rate: config.discountRate, clamp: clampToCents };

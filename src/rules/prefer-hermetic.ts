@@ -6,9 +6,10 @@ import { createRule, sealed } from "./sealed.ts";
 
 export interface PreferHermeticOptions extends HermeticSettings {
   /**
-   * Also split functions whose only outside inputs are module bindings or
-   * globals into a hermetic core and a binding that supplies them, keeping the
-   * public name, signature and export. Off by default.
+   * Also rewrite functions whose only hidden inputs are module-level values
+   * or globals: the body moves into a new hermetic function that receives them
+   * through `this`, and the original becomes a wrapper that passes them in,
+   * keeping its name, signature and export. Off by default.
    */
   lift?: boolean;
 }
@@ -28,7 +29,7 @@ export const preferHermetic = createRule<[PreferHermeticOptions], MessageIds>({
         type: "object",
         properties: {
           ...SETTINGS_SCHEMA,
-          lift: { type: "boolean", description: "Split functions with only module-level or global inputs into a hermetic core and a binding." },
+          lift: { type: "boolean", description: "Rewrite functions whose only hidden inputs are module-level values or globals, passing them in through 'this'." },
         },
         additionalProperties: false,
       },
@@ -36,7 +37,7 @@ export const preferHermetic = createRule<[PreferHermeticOptions], MessageIds>({
     defaultOptions: [{}],
     messages: {
       alreadyHermetic: "'{{fn}}' is already hermetic. Mark it so it stays that way.",
-      liftable: "'{{fn}}' reaches outside itself only for {{names}}. Lift them into its context to make it hermetic.",
+      liftable: "'{{fn}}' reads {{names}} from outside its inputs. Its lift fix passes {{names}} in through 'this', making it hermetic.",
     },
   },
   create(context, [options]) {
@@ -75,7 +76,7 @@ export const preferHermetic = createRule<[PreferHermeticOptions], MessageIds>({
 /**
  * Outermost functions bound to a name: declarations, variable initializers,
  * and object or class members. Callbacks passed as arguments and IIFEs are
- * left alone; marking them would be noise.
+ * ignored; marking them would be noise.
  */
 export function isCandidate(node: FunctionNode): boolean {
   for (let ancestor: TSESTree.Node | undefined = node.parent; ancestor; ancestor = ancestor.parent) {

@@ -1,7 +1,7 @@
 /**
- * The ground bootstrap: the one place that decides which globals hermetic
- * functions may assume. This file spells out the default ground, so it is a
- * starting point to copy and edit.
+ * The bootstrap that chooses which globals hermetic functions may read. This
+ * file spells out the default list, so it is a starting point to copy and
+ * edit.
  *
  * The linter lints this function with the rule itself, runs it in a fresh
  * `node:vm` realm, and reads the keys of `allow` and the paths in `deny`. At

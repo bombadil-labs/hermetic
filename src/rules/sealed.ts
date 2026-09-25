@@ -35,7 +35,7 @@ export const sealed: TSESLint.RuleModule<MessageIds, [SealedOptions]> & { name: 
     type: "problem",
     docs: {
       description:
-        "Require hermetic functions to touch the world only through their arguments, `this`, and the ground",
+        "Require hermetic functions to read nothing but their inputs and the allowed globals",
     },
     schema: [{ type: "object", properties: SETTINGS_SCHEMA, additionalProperties: false }],
     defaultOptions: [{}],
@@ -43,25 +43,25 @@ export const sealed: TSESLint.RuleModule<MessageIds, [SealedOptions]> & { name: 
       freeVariable:
         "'{{name}}' is a free variable in hermetic function '{{fn}}'. Pass it through 'this' or an argument.",
       shadowedGround:
-        "'{{name}}' refers to a binding declared outside hermetic function '{{fn}}', not the ground global. Pass it through 'this' or an argument.",
+        "'{{name}}' in hermetic function '{{fn}}' refers to a variable declared outside it, not the allowed global. Pass it through 'this' or an argument.",
       groundWrite:
-        "Hermetic function '{{fn}}' assigns to the ground global '{{name}}'. The ground can be read, not reassigned.",
+        "Hermetic function '{{fn}}' assigns to the allowed global '{{name}}'. Allowed globals can be read, not reassigned.",
       deniedPath:
-        "'{{path}}' is denied by the ground in hermetic function '{{fn}}'. Pass it through 'this' or an argument.",
+        "'{{path}}' is not allowed in hermetic function '{{fn}}'. Pass it through 'this' or an argument.",
       aliasedGround:
-        "'{{path}}' has denied members, and hermetic function '{{fn}}' hands it on here, where they could be reached. Pass what you need through 'this' or an argument.",
+        "'{{path}}' has members that are not allowed, and hermetic function '{{fn}}' passes it on here, where they could be used. Pass what you need through 'this' or an argument.",
       typeReference:
-        "Type reference '{{name}}' escapes hermetic function '{{fn}}'. With types: \"structural-only\", write the type structurally.",
+        "Type reference '{{name}}' in hermetic function '{{fn}}' refers to a declaration outside it. With types: \"structural-only\", write the type inline.",
       lexicalThis:
-        "'this' in hermetic arrow function '{{fn}}' is lexical, so it reaches the enclosing scope. Use a non-arrow function to receive 'this'.",
+        "'this' in hermetic arrow function '{{fn}}' comes from the enclosing scope, not from its inputs. Use a non-arrow function to receive 'this'.",
       lexicalNewTarget:
-        "'new.target' in hermetic arrow function '{{fn}}' is lexical, so it reaches the enclosing scope. Use a non-arrow function.",
+        "'new.target' in hermetic arrow function '{{fn}}' comes from the enclosing scope. Use a non-arrow function.",
       superReference:
-        "'super' in hermetic function '{{fn}}' reaches the enclosing home object. Pass the behavior through 'this' or an argument.",
+        "'super' in hermetic function '{{fn}}' refers to the enclosing class or object. Pass the behavior through 'this' or an argument.",
       importMeta:
-        "'import.meta' in hermetic function '{{fn}}' reaches the enclosing module. Pass the value through 'this' or an argument.",
+        "'import.meta' in hermetic function '{{fn}}' refers to the enclosing module. Pass the value through 'this' or an argument.",
       dynamicImport:
-        "Dynamic import() in hermetic function '{{fn}}' loads code through ambient authority. Pass the module through 'this' or an argument.",
+        "Dynamic import() in hermetic function '{{fn}}' loads a module that is not one of its inputs. Pass the module through 'this' or an argument.",
       jsx: "JSX in hermetic function '{{fn}}' compiles to a call to the JSX factory, which is a free variable. Pass an element factory through 'this' or an argument.",
     },
   },

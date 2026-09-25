@@ -60,6 +60,14 @@
               function reads anything besides its inputs can be checked, with the same scope analysis ESLint uses to find
               undefined variables.
             </p>
+            <p class="not">
+              <strong>It isn't a sandbox either.</strong> Every value, even a literal, leads through its prototype chain to
+              built-ins the whole program shares, and a hermetic function can still change them:
+              <code>({}).__proto__.hasOwnProperty = () =&gt; true</code> changes <code>hasOwnProperty</code> for every
+              object. The rule checks names, not where values lead. To confine code you don't trust, use
+              <a href="https://hardenedjs.org/">Hardened JS</a>: it freezes the shared built-ins, and gives code its own
+              global object holding only the globals you choose.
+            </p>
           </div>
           <div>
             <pre data-lang="ts">function applyDiscount(this: Pricing, invoice: Invoice) {
@@ -196,7 +204,7 @@ export const applyPricing = applyDiscount.bind(pricing);</pre>
             <p>
               Documentation: <a href="https://github.com/bombadil-labs/hermetic/blob/main/docs/rules/sealed.md">hermetic/sealed</a>,
               <a href="https://github.com/bombadil-labs/hermetic/blob/main/docs/rules/prefer-hermetic.md">hermetic/prefer-hermetic</a>,
-              and <a href="https://github.com/bombadil-labs/hermetic#the-ground">choosing the allowed globals</a>.
+              and <a href="https://github.com/bombadil-labs/hermetic#allowed-globals">choosing the allowed globals</a>.
             </p>
           </div>
           <div>

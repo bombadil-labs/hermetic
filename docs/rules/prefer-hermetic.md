@@ -1,15 +1,15 @@
 # hermetic/prefer-hermetic
 
-Mark functions that are already hermetic, and optionally split the rest into a hermetic core and a binding.
+Mark functions that are already hermetic, and optionally rewrite others so they are.
 
 `hermetic/sealed` keeps marked functions hermetic. This rule finds the functions to mark. Its fixes are meant to run once over a whole codebase, with `--fix`, and to preserve behavior.
 
 ## Rule details
 
-The rule considers the outermost functions bound to a name: function declarations, variable initializers, and object and class members. Callbacks passed as arguments and IIFEs are left alone. Functions that are already marked are skipped.
+The rule considers the outermost functions bound to a name: function declarations, variable initializers, and object and class members. Callbacks passed as arguments and IIFEs are ignored, and so are functions that are already marked.
 
 - **`alreadyHermetic`**: the function would pass `hermetic/sealed` as it stands. The fix marks it. A block body gets `"use hermetic"` straight after its opening brace, so comments such as `// @ts-expect-error` stay with the statements they precede. An expression-bodied arrow gets an `@hermetic` tag, added to its JSDoc block if it has one.
-- **`liftable`**, with `lift: true`: the function reaches outside itself only for module bindings and globals. The fix lifts them into a context: the body moves into a hermetic core that reads them from `this`, and the original name becomes a binding that calls the core with them.
+- **`liftable`**, with `lift: true`: the function's only hidden inputs are module-level values and globals. The fix moves the body into a new hermetic function that reads them from `this`, and turns the original function into a wrapper that calls it with them.
 
 With `lift: true`, this module:
 
@@ -80,50 +80,50 @@ export function report(dollars: number) {
 }
 ```
 
-`round` was already hermetic, so it is marked. `toCents` and `discount` are lifted. `report` is left alone for the reason given under [what the lift leaves alone](#what-the-lift-leaves-alone).
+`round` was already hermetic, so it is marked. `toCents` and `discount` are lifted. `report` is skipped, for the reason given under [what the lift skips](#what-the-lift-skips).
 
-### The binding and the core
+### The wrapper and the hermetic function
 
-The binding keeps the function's name, type parameters, parameters, defaults, return type, export and JSDoc, so callers do not change. The core follows it: a function declaration named after it, with the same body and the lifted names read from `this`, typed by a `this` parameter.
+The wrapper keeps the function's name, type parameters, parameters, defaults, return type, export and JSDoc, so callers don't change. The new hermetic function follows it: a function declaration named after it, such as `toCentsHermetic`, with the same body, reading the lifted names from `this`, which a `this` parameter types.
 
-The binding passes the context in one of two forms:
+The wrapper passes `this` in one of two forms:
 
-- **Directly**, as in `toCents`, when every lifted value is *settled*: initialized, and never reassigned, whenever the binding can run. Function declarations and namespace imports are always settled. So are constants and classes declared above a binding that does not hoist.
-- **Through a shared context**, as in `discount`, otherwise. The context is one object, created right after the binding, whose getters read each binding when the core does, and whose setters write assignments back. A binding that does not hoist cannot run before its own statement, and the context statement comes next, so the context always exists when the binding runs.
+- **Directly**, as in `toCents`, when every lifted value is *settled*: initialized whenever the wrapper can run, and never reassigned. Function declarations and namespace imports are always settled, and so are constants and classes declared above a wrapper that isn't hoisted.
+- **Through a shared context object**, as in `discount`, otherwise. The object is created once, right after the wrapper. Its getters read each value when the hermetic function does, and its setters write assignments back. A wrapper that isn't hoisted can't run before its own statement, and the context object's statement comes right after it, so the object always exists when the wrapper runs.
 
-A function declaration hoists. It can run before any statement of its module, and in an import cycle before its imports are initialized. So a declaration is lifted only when its context can be passed directly.
+A function declaration is hoisted. It can run before any statement of its module, and in an import cycle, before its imports are initialized. So a declaration is only lifted when its values can be passed directly.
 
-### What the lift leaves alone
+### What the lift skips
 
-The fix only applies when the split cannot change behavior or types. It skips:
+The fix only applies when the rewrite can't change behavior or types. It skips:
 
 - Functions that use their own `this`, `arguments`, `new.target` or `super`, or use `import.meta`, `import()` or JSX.
-- Functions that reach a lifted name from a nested `function` or class, where `this` is rebound.
+- Functions that use a lifted name inside a nested `function` or class, where `this` means something else.
 - Writes to constants, imports and globals.
 - Function declarations that read anything unsettled: named imports, module constants, globals or mutable state, like `report` above.
-- Named function expressions, declarations with several declarators, and variables with a type annotation, such as `const f: Handler = ...`, whose function is typed from the annotation.
+- Named function expressions, declarations with several declarators, and variables with a type annotation, such as `const f: Handler = ...`, whose function takes its type from the annotation.
 - Functions inside other functions, blocks or classes.
 - `this` parameters, `asserts` return types, and `@ts-expect-error`, `@ts-ignore` or `@ts-nocheck` comments, whose target lines would move.
-- Signatures TypeScript cannot repeat faithfully: a rest parameter in a generic function typed as anything but a type parameter, an array or a tuple, and a mapped type with an `as` clause written into the signature.
-- Functions that read the stack, through `.stack`, `Error.captureStackTrace`, `Error.prepareStackTrace` or `Error.stackTraceLimit`. The split adds a frame.
-- Defaults that read a destructured parameter, and defaults that call a function. The binding and the core both keep each default, and the core's runs again whenever the binding's produced `undefined`.
+- Signatures TypeScript can't repeat faithfully: a rest parameter in a generic function typed as anything but a type parameter, an array or a tuple, and a mapped type with an `as` clause written into the signature.
+- Functions that read the stack, through `.stack`, `Error.captureStackTrace`, `Error.prepareStackTrace` or `Error.stackTraceLimit`. The rewrite adds a stack frame.
+- Defaults that read a destructured parameter, and defaults that call a function. The wrapper and the hermetic function both keep each default, and the hermetic function's default runs again whenever the wrapper's produced `undefined`.
 - Everything, under `types: "structural-only"`: the generated `this` type refers to module declarations.
 
 ### What changes
 
-- **The stack has one more frame.** Code that finds its caller by counting frames, in the function or anything it calls, sees the binding.
-- **`toString()`** of the public function returns the binding. The body is in the core.
-- **Lifted functions receive the context as `this`.** The core calls `this.round(...)` where the original called `round(...)`, so `round` runs with the context as `this` instead of `undefined`. Functions that ignore `this`, which is nearly all module functions, are unaffected.
-- **Host functions called bare are bound to `globalThis`**, so that calls such as `this.fetch(url)` keep their receiver. Each read returns a new bound function.
-- **Async functions and generators** become plain functions that return the core's promise or iterator.
+- **The stack has one more frame.** Code that finds its caller by counting frames, in the function or anything it calls, sees the wrapper.
+- **`toString()`** of the public function returns the wrapper. The body is in the hermetic function.
+- **Functions called through `this` receive it as their `this`.** The hermetic function calls `this.round(...)` where the original called `round(...)`, so `round` runs with the context object as `this` instead of `undefined`. Functions that ignore `this`, which is nearly all module functions, are unaffected.
+- **Global functions called without a receiver are bound to `globalThis`**, so that calls such as `this.fetch(url)` keep working. Each read returns a new bound function.
+- **Async functions and generators** become plain functions that return the hermetic function's promise or iterator.
 - **Each call costs one more call and some property reads.** In microbenchmarks of Effect's hottest paths (collections, the fiber runtime, Schema decoding), the lifted library ran 25 to 73 percent slower. The cost is per call, so it matters where calls are cheap and frequent. [Unlifting](#unlifting-at-build-time) removes it from builds.
-- **Formatting and ordering.** The fix emits plain formatting, so run your formatter afterwards. The binding refers to its context and core, which are declared after it, and `no-use-before-define` reports that unless its `functions` and `variables` options are off.
+- **Formatting and ordering.** The fix emits plain formatting, so run your formatter afterwards. The wrapper refers to its context object and hermetic function, which are declared after it, and `no-use-before-define` reports that unless its `functions` and `variables` options are off.
 
 ### Unlifting at build time
 
-The lift has an exact inverse. `unlift` turns each binding back into the function it came from: the core's parameters and body return to the binding, each `this.name` reads `name` again, and the core and its context are removed. The result carries no directive, since it is no longer hermetic. Source stays hermetic, checked and testable, while a build ships the original code and none of the costs above.
+The lift has an exact inverse. `unlift` turns each wrapper back into the original function: the hermetic function's parameters and body return to the wrapper, each `this.name` reads `name` again, and the hermetic function and its context object are removed. The result carries no directive, since it is no longer hermetic. The source can stay hermetic, checked and testable, while a build runs the original code, without the costs above.
 
-It folds a binding back only where that is exact: the core is used by its binding alone, reads `this` only through the names its context provides, and none of those names is shadowed where the core reads it. A core that tests import, or that someone has edited out of the lift's shape, stays as it is and is reported.
+It only turns a wrapper back where that is exact: the hermetic function is used by its wrapper alone, reads `this` only through the names its context provides, and none of those names is shadowed where the hermetic function reads it. A hermetic function that tests import, or that someone has edited out of the lift's shape, stays as it is and is reported.
 
 On the corpus, unlifting the lifted code gives back the marked original in every file: the same syntax tree once types are erased, with every comment in place, apart from the equivalences the lift cannot record (`=> { return x; }` and `=> x`, `{ x: x }` and `{ x }`, and parenthesization). The round trip adds no type errors. Effect's 6,233 tests pass on its unlifted source, and its benchmarks run within noise of the original. Times are relative to Effect's own source; the last column is a second, untouched copy of it, timed the same way, so it shows the noise:
 
@@ -146,7 +146,7 @@ type Options = {
 };
 ```
 
-- **`lift`**: also fix functions whose only outside inputs are module bindings and globals, as described above.
+- **`lift`**: also rewrite functions whose only hidden inputs are module-level values and globals, as described above.
 - **`types`**, **`ground`**, **`aliasing`**: the same as for [`hermetic/sealed`](sealed.md#options), so that "already hermetic" means what `sealed` will enforce. Both rules also read these from `settings.hermetic`, which is the simplest way to keep them in step.
 
 ## Making a codebase hermetic
@@ -157,8 +157,8 @@ npx eslint --fix --rule '{"hermetic/prefer-hermetic": ["warn", {"lift": true}]}'
 
 Then turn on `hermetic/sealed`, which the recommended config does, so the marked functions stay hermetic.
 
-On a corpus of 5,315 candidate functions from Effect, RxJS and TanStack Query, 22.8% were already hermetic and 46.1% were lifted. The remaining 31.1% were left for a person, among them methods that use `this`, React components, and RxJS operators declared as functions that read named imports. The fixed code parses, passes `hermetic/sealed`, is unchanged by a second `--fix`, and type-checks with no new errors. Effect's own 6,233 tests pass on its lifted source. `npm run corpus` in this repository reproduces these numbers.
+On a corpus of 5,315 candidate functions from Effect, RxJS and TanStack Query, 22.8% were already hermetic and 46.1% were lifted. The remaining 31.1% were skipped, among them methods that use `this`, React components, and RxJS operators declared as functions that read named imports. The fixed code parses, passes `hermetic/sealed`, is unchanged by a second `--fix`, and type-checks with no new errors. Effect's own 6,233 tests pass on its lifted source. `npm run corpus` in this repository reproduces these numbers.
 
 ## When not to use it
 
-Leave `lift` off where every call counts, and in code whose job is to reach ambient authority, such as a binding layer or an entry point. Marking alone never changes behavior.
+Leave `lift` off where every call counts, and in code whose job is to reach the outside world, such as an entry point, or the code that binds dependencies to hermetic functions. Marking alone never changes behavior.

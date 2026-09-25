@@ -106,7 +106,7 @@ function total(invoice: Invoice) {
 
 When hermetic functions are nested, a problem is reported once, for the innermost of them.
 
-This rule checks names. It can't follow values, so it doesn't stop a hermetic function from reaching the program's shared built-ins through a prototype chain, as in `({}).__proto__.hasOwnProperty = () => true`. See [what hermetic functions don't give you](../../README.md#what-hermetic-functions-dont-give-you).
+This rule checks names. It can't follow values, so it doesn't stop a hermetic function from reaching the program's shared built-ins through a prototype chain, as in `({}).__proto__.hasOwnProperty = () => true`. To run a function you don't trust, use [`confine`](../../../hermetic/README.md#confine) from `@bombadil/hermetic`, which runs it in a Hardened JS compartment where the shared built-ins are frozen. See [what hermetic functions don't give you](../../../../README.md#what-hermetic-functions-dont-give-you).
 
 ## Options
 

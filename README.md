@@ -1,6 +1,6 @@
 # hermetic
 
-**A hermetic function reads nothing but its inputs: its arguments, including `this`, and a short list of allowed globals.** It doesn't use imports, module-level variables, or globals like `fetch` and `Date`; anything else it needs has to be passed in. `hermetic/sealed` checks the functions you mark as hermetic, and `hermetic/prefer-hermetic` finds functions that already are, and rewrites others so they can be. The name comes from hermetic builds, which likewise depend only on their declared inputs.
+**A hermetic function reads nothing but its inputs: its arguments, including `this`, and a short list of allowed globals.** It doesn't use imports, module-level variables, or globals like `fetch` and `Date`; anything else it needs has to be passed in. An ESLint plugin checks the functions you mark as hermetic, and rewrites existing functions so they can be. A runtime package checks a function from its source alone, and runs it confined. The name comes from hermetic builds, which likewise depend only on their declared inputs.
 
 ```ts
 function applyDiscount(this: Pricing, invoice: Invoice) {
@@ -20,7 +20,7 @@ Hermetic doesn't mean pure. A hermetic function can change its inputs, or call m
 
 What you get:
 
-- **Portable code.** The function's source is all of its behavior, so it runs the same in another file, a worker or a sandbox: `new Function("return " + fn.toString())()` behaves exactly like `fn`. This repository's tests check that on the examples.
+- **Portable code.** The function's source is all of its behavior, so it runs the same in another file, a worker or a sandbox: `new Function("return " + fn.toString())()` behaves exactly like `fn`. This repository's tests check that on the examples, and `confine` runs a function's source in a Hardened JS compartment.
 - **Tests without module mocks.** Pass test values as inputs. Wrap `this` in a Proxy to record every use of the dependencies the function was given.
 - **Dependencies you can find.** To find out which functions can call Stripe, look at the code that passes the Stripe client in.
 - **Self-contained changes.** A function's inputs, the type of `this` and its body are everything a person or an agent needs to read before changing it. The rule checks generated code the same way as handwritten code.
@@ -35,19 +35,24 @@ What you get:
 - **Settled**: a module-level name that is initialized before a wrapper can run, and never reassigned. A wrapper passes settled values directly, and everything else through a shared context object.
 - **Unlift**: the exact inverse of the lift. It turns each wrapper back into the original function.
 
-## Install
+## Two packages
+
+| Package | What it does |
+| --- | --- |
+| [`@bombadil/eslint-plugin-hermetic`](packages/eslint-plugin-hermetic) | ESLint rules. `hermetic/sealed` checks the functions you mark as hermetic, and `hermetic/prefer-hermetic` finds functions that already are, and rewrites others so they can be. |
+| [`@bombadil/hermetic`](packages/hermetic) | The same check at runtime, with no ESLint. `check` reads a function's source and reports what it reads besides its inputs, and `confine` runs a hermetic function in a [Hardened JS](https://hardenedjs.org/) compartment. |
+
+In your editor and CI, lint:
 
 ```sh
-npm install --save-dev @bombadil/hermetic
+npm install --save-dev @bombadil/eslint-plugin-hermetic
 ```
-
-Requires Node 22.13+ or 24+. Peer dependencies: `eslint` 9 or 10, and `@typescript-eslint/parser` 8.
 
 ```js
 // eslint.config.js
 import { defineConfig } from "eslint/config";
 import tseslint from "typescript-eslint";
-import hermetic from "@bombadil/hermetic";
+import hermetic from "@bombadil/eslint-plugin-hermetic";
 
 export default defineConfig(
   ...tseslint.configs.recommended,
@@ -55,196 +60,33 @@ export default defineConfig(
 );
 ```
 
-`hermetic/sealed` only checks functions marked hermetic, so turning it on doesn't affect the rest of your code. Both rules also work on plain JavaScript through ESLint's default parser.
-
-| Rule | What it does | Fix |
-| --- | --- | --- |
-| [`hermetic/sealed`](docs/rules/sealed.md) | Reports the hidden inputs of functions marked hermetic. In the recommended config. | |
-| [`hermetic/prefer-hermetic`](docs/rules/prefer-hermetic.md) | Reports functions that are already hermetic, and with `lift`, functions it can rewrite to be hermetic. | Marks, or lifts |
-
-## Marking a function
-
-Put a `"use hermetic"` directive at the top of the body:
-
-```ts
-function total(invoices: Invoice[]) {
-  "use hermetic";
-  return invoices.reduce((sum, invoice) => sum + invoice.total, 0);
-}
-```
-
-The directive survives TypeScript and esbuild, and appears in `fn.toString()`, so tools can recognize hermetic functions at runtime without a registry. **terser strips unknown directives by default.** Set `compress: { directives: false }` if production code needs to keep them.
-
-A JSDoc `@hermetic` tag at the start of a line also marks a function. It works on arrow functions with an expression body, which can't hold a directive, but it isn't visible at runtime:
-
-```ts
-/** @hermetic */
-export const cents = (n: number) => Math.round(n * 100);
-```
-
-Both forms apply to function declarations, function expressions, arrow functions, and object and class methods.
-
-## What the rule reports
-
-`hermetic/sealed` reports every hidden input of a marked function: each name it uses that isn't declared inside it and isn't an allowed global. It also reports the forms that scope analysis can't see:
-
-| Reported | Example | Why |
-| --- | --- | --- |
-| Free variables | `return a * RATE;` | A hidden input. This includes imports, other hermetic functions, and `typeof window`. |
-| Allowed globals shadowed by a local | `import { JSON } from "./json"` | The name refers to your variable, not the global. |
-| Assignments to allowed globals | `Math = …` | Allowed globals can be read, not reassigned. |
-| Denied members | `Math.random()`, `const { random } = Math` | The member isn't allowed. See [allowed globals](#allowed-globals). |
-| `this` or `new.target` in a hermetic arrow function | `() => { "use hermetic"; return this.x; }` | An arrow function's `this` comes from the enclosing scope, not from its inputs. |
-| `super` | `super.method()` | It refers to the enclosing class or object. |
-| `import.meta`, `import()` | `import.meta.url` | They refer to the enclosing module, or load code. |
-| JSX | `return <div />;` | It compiles to a call to the JSX factory, which is a free variable. |
-
-The message says what to do:
-
-```
-'taxRate' is a free variable in hermetic function 'applyDiscount'. Pass it through 'this' or an argument.
-```
-
-**Allowed:** parameters, local variables, `arguments`, `this` in functions other than arrow functions, literals, allowed globals and their members, calling a callback passed in as an argument, and a function declaration calling itself by name. The last one still works after the function is moved, because re-evaluating its source turns the declaration into a named function expression, which binds its own name. If the name is reassigned, the call is reported again.
-
-Nested functions may use the hermetic function's own local variables. Only names from outside the marked function are checked.
-
-**Calling another hermetic function by name is still a hidden input.** Pass it in, usually through `this`:
-
-```ts
-export function checkout(this: { price: (invoice: Invoice) => Invoice }, invoices: Invoice[]) {
-  "use hermetic";
-  return invoices.reduce((sum, invoice) => sum + this.price(invoice).total, 0);
-}
-```
-
-## Allowed globals
-
-The allowed globals are the global names a hermetic function may read, except for any denied members inside them. The default list:
-
-| Category | Allowed | Not allowed, and why |
-| --- | --- | --- |
-| Values | `undefined`, `NaN`, `Infinity` | |
-| Data structures | `Array`, `Object`, `Map`, `Set`, `WeakMap`, `WeakSet`, `Symbol` | |
-| Primitives | `Number`, `String`, `Boolean`, `BigInt`, `parseInt`, `parseFloat`, `isNaN`, `isFinite` | |
-| Structured data | `JSON`, `RegExp`, `Promise`, the error constructors | |
-| Math | `Math` | `Math.random` (nondeterministic) |
-| Time | | `Date` (reads the clock) |
-| I/O and host access | | `fetch`, `crypto`, `console`, timers, `process`, `globalThis`, `window`, `document` |
-| Code loading | | `eval`, `Function` |
-| Locale | | `Intl` (depends on the host's locale) |
-
-Anything not listed isn't allowed, including deterministic built-ins such as `Reflect`, typed arrays and `encodeURIComponent`. Add what you need in a bootstrap.
-
-### Choosing the allowed globals with a bootstrap
-
-The allowed globals are defined in code, by a hermetic function that receives a realm and returns `{ allow, deny }`:
-
-```ts
-// hermetic.ground.ts
-export function ground(realm: typeof globalThis) {
-  "use hermetic";
-  return {
-    allow: { Math: realm.Math, JSON: realm.JSON, Array: realm.Array, Object: realm.Object },
-    deny: ["Math.random"],
-  };
-}
-```
-
-```js
-// eslint.config.js
-hermetic.configs.recommended,
-{ settings: { hermetic: { ground: "./hermetic.ground.ts" } } },
-```
-
-The plugin loads it in three steps:
-
-1. It lints the bootstrap with `hermetic/sealed`, using the default allowed globals, and refuses to load it unless it is marked hermetic and passes. Suppression comments are ignored here.
-2. It erases the function's TypeScript syntax and evaluates its source text on its own, in a fresh `node:vm` context with string compilation disabled and a one-second timeout. The lint is what makes this reasonable: the function reads nothing but the realm passed to it. A vm context is not a security boundary.
-3. It reads the keys of `allow` and the paths in `deny`. Only the keys matter to the linter.
-
-The bootstrap is the export named `ground`, or else the default export. It may use TypeScript syntax that erases cleanly: annotations, `as`, `satisfies`, `!`, generics and local type declarations. Erasure keeps every line and column in place, so errors point into your file. Syntax that needs a compiler, such as enums and namespaces, is refused. [`examples/hermetic.ground.ts`](examples/hermetic.ground.ts) spells out the default list, as a starting point to copy.
-
-The same file can be used at runtime. An entry point can call `ground(globalThis)`, for example to build the globals of a Hardened JS Compartment, so the linter and the runtime share one list. **Keep it a literal list.** At lint time, `realm` is a bare JavaScript realm, so a bootstrap that enumerates `realm` would see different names than it sees at runtime.
-
-ESLint's `--cache` doesn't know about the bootstrap. Clear the cache after changing it.
-
-### Denied members and aliasing
-
-Denied members are checked through static member access (`Math.random`, `Math["random"]`, `Math?.random`, `(Math as any).random`) and destructuring (`const { random } = Math`, including nested patterns and parameter defaults).
-
-The check is best effort: `const m = Math; m.random()` gets past it. There are two ways to close the gap:
-
-- Set `aliasing: "forbid"`. An allowed global with denied members may then only be used in place: static member access, destructuring, `typeof`, calling or constructing it, and comparisons. Anything that could pass it elsewhere, such as `const m = Math`, `Math[key]` or `f(Math)`, is reported.
-- Leave the whole object out of the allowed globals, and pass what you need through `this`.
-
-## Options
-
-```ts
-type Options = {
-  types?: "allow" | "structural-only"; // default "allow"
-  ground?: string; // path to a bootstrap, absolute or relative to ESLint's cwd (or a file: URL)
-  aliasing?: "best-effort" | "forbid"; // default "best-effort"
-};
-```
-
-Both rules take these options, and both read them from `settings.hermetic` as well, so one setting configures both. Options given to a rule take precedence.
-
-```js
-// eslint.config.js
-{ settings: { hermetic: { ground: "./hermetic.ground.ts", aliasing: "forbid" } } },
-```
-
-- **`types`**. Type-only references are erased at runtime, so `"allow"` permits them, including `typeof x` in type positions. `"structural-only"` reports type references that resolve to a declaration outside the function, such as imports and module-level interfaces and aliases, so the function can move across files unchanged. TypeScript's lib types and other global types stay allowed.
-- **`ground`**. The bootstrap that chooses the allowed globals. See [allowed globals](#allowed-globals).
-- **`aliasing`**. See [denied members and aliasing](#denied-members-and-aliasing).
-
-## Binding `this`
-
-TypeScript type-checks the value of `this` in every `.call`, `.apply` and `.bind`:
-
-```ts
-const pricing: Pricing = { rate: config.discountRate, clamp: clampToCents };
-export const applyPricing = applyDiscount.bind(pricing); // (invoice: Invoice) => Invoice
-```
-
-`ThisParameterType<F>` extracts the type of `this`, and `OmitThisParameter<F>` gives the signature after binding. With `types: "structural-only"`, write the type of `this` inline on the function, and name it where you bind it with `ThisParameterType<typeof applyDiscount>`. That way the function stays the source of truth for what it needs.
-
-See [`examples/pricing.ts`](examples/pricing.ts) for a complete example.
-
-## Making a codebase hermetic
-
-`hermetic/prefer-hermetic` finds functions that are already hermetic and marks them. With `lift`, it also rewrites functions whose hidden inputs are all module-level values or globals: the body moves into a new hermetic function that receives them through `this`, and the original function becomes a wrapper that passes them in.
-
-```ts
-// before
-export const discount = (dollars: number, rate = 0.2) => toCents(dollars * (1 - rate));
-
-// after --fix
-export const discount = (dollars: number, rate = 0.2) => discountHermetic.call({ toCents }, dollars, rate);
-
-function discountHermetic(this: { toCents: typeof toCents }, dollars: number, rate = 0.2) {
-  "use hermetic";
-  return this.toCents(dollars * (1 - rate));
-}
-```
-
-The wrapper passes exactly what the function used to read from its surroundings. Callers don't change, and you can narrow what is passed in by hand afterwards. One command does the whole codebase:
+Where a function arrives as source, from storage, another process or another person, check it, or run it confined:
 
 ```sh
-npx eslint --fix --rule '{"hermetic/prefer-hermetic": ["warn", {"lift": true}]}' src/
+npm install @bombadil/hermetic
 ```
 
-The fix only rewrites a function when the rewrite can't change its behavior or types, and leaves every other function as it was. On Effect, RxJS and TanStack Query, it marked 22.8% of 5,315 candidate functions and lifted 46.1%; the fixed code type-checks with no new errors, and Effect's own 6,233 tests pass on its lifted source. The [case studies](https://bombadil-labs.github.io/hermetic/) go through each library: what was marked, lifted and skipped, and why. The [rule's documentation](docs/rules/prefer-hermetic.md) lists what it skips, what changes (a stack frame, `toString`, a per-call cost), and how it decides.
+```ts
+import { check, confine } from "@bombadil/hermetic";
 
-The lift has an exact inverse, `unlift`, which turns each wrapper back into the original function, so the source can stay hermetic while a build runs the original code. On the corpus, unlifting the lifted code gives back the original program in every file, and Effect's benchmarks go from 25–73% slower when lifted to within noise of the original when unlifted. `unlift` isn't part of the published package yet; a bundler plugin that runs it on production builds is next. See [unlifting at build time](docs/rules/prefer-hermetic.md#unlifting-at-build-time).
+check(source); // { form, marked, hermetic, problems: [{ kind, name, start, end }] }
+
+// After the application imports ses and calls lockdown():
+const fn = confine(source); // throws a HermeticError unless it is hermetic
+```
+
+`check` reports what `hermetic/sealed` reports, except what only the module around a function can show. On the 14,416 functions and methods in the published JavaScript of Effect, RxJS and TanStack Query, the two agree everywhere but 9 functions in Effect, whose modules declare or import names that are also allowed globals, such as Effect's own `Array` module. `hermetic/sealed` reports those, and a function's source alone can't show them. [The package's README](packages/hermetic/README.md#what-a-functions-source-cant-show) has the details.
+
+Up to 0.2.0, `@bombadil/hermetic` was the ESLint plugin. Its rules are now in `@bombadil/eslint-plugin-hermetic`: install it, and change the import in `eslint.config.js`.
+
+The rules are documented in [the plugin's README](packages/eslint-plugin-hermetic): [marking a function](packages/eslint-plugin-hermetic/README.md#marking-a-function), [what the rule reports](packages/eslint-plugin-hermetic/README.md#what-the-rule-reports), [allowed globals](packages/eslint-plugin-hermetic/README.md#allowed-globals), [options](packages/eslint-plugin-hermetic/README.md#options), [binding `this`](packages/eslint-plugin-hermetic/README.md#binding-this) and [making a codebase hermetic](packages/eslint-plugin-hermetic/README.md#making-a-codebase-hermetic).
 
 ## What hermetic functions don't give you
 
 - **Purity.** A hermetic function can do anything its inputs allow, and any input can be a Proxy.
-- **A sandbox.** Every value, even a literal, is connected to the program's shared built-ins through its prototype chain. A hermetic function can change them, as in `({}).__proto__.hasOwnProperty = () => true`, which changes `hasOwnProperty` for every object in the program, or reach the global object with `[].constructor.constructor("return globalThis")()`. The rule checks names, and these reach the built-ins through values. ESLint's own `no-proto` and `no-extend-native` rules catch the direct spellings, but not computed keys or `Object.getPrototypeOf`. For code you don't trust, use [Hardened JS](https://hardenedjs.org/): `lockdown()` freezes the shared built-ins, so writes like these fail, and a Compartment gives the code its own global object, holding only the globals you give it. Those can come from the same bootstrap.
+- **A sandbox, by itself.** Every value, even a literal, is connected to the program's shared built-ins through its prototype chain. A hermetic function can change them, as in `({}).__proto__.hasOwnProperty = () => true`, which changes `hasOwnProperty` for every object in the program, or reach the global object with `[].constructor.constructor("return globalThis")()`. The rule and `check` look at names, and these reach the built-ins through values. ESLint's own `no-proto` and `no-extend-native` rules catch the direct spellings, but not computed keys or `Object.getPrototypeOf`. For code you don't trust, use [`confine`](packages/hermetic/README.md#confine): it runs a function in a [Hardened JS](https://hardenedjs.org/) compartment, where the shared built-ins are frozen, so writes like these throw, and the global object holds only the allowed globals.
 - **Determinism by itself.** A hermetic function sees only its inputs and the allowed globals, so, like a hermetic build, it behaves the same whenever those are the same. Pass it a clock or a random source and its results vary, but through an input you can see and replace. That is what makes record and replay possible.
-- **Complete denied members**, unless `aliasing: "forbid"` is set. See above.
+- **Complete denied members**, unless `aliasing: "forbid"` is set or the function runs under `confine`. See [denied members and aliasing](packages/eslint-plugin-hermetic/README.md#denied-members-and-aliasing).
 
 ## Status
 
@@ -257,6 +99,8 @@ The lift has an exact inverse, `unlift`, which turns each wrapper back into the 
 | M5 | Recording Proxy for `this`, replaying a captured call as a test | Next |
 | | `hermetic/prefer-hermetic`: marking and lift fixes, validated on a corpus | Done |
 | | `unlift`: the lift's exact inverse, validated by a round trip on the corpus | Done |
+| | `check`: the same check at runtime, from a function's source, validated against the rule on the corpus | Done |
+| | `confine`: running a hermetic function in a Hardened JS compartment | Done |
 | | Bundler plugin that unlifts production builds | Next |
 
 ## Development
@@ -264,17 +108,19 @@ The lift has an exact inverse, `unlift`, which turns each wrapper back into the 
 ```sh
 npm install
 npm run check    # typecheck, lint, test
-npm run build    # emit dist/
-npm run corpus   # census, stress, fix and round trip on pinned open-source packages
+npm run build    # emit each package's dist/
+npm run corpus   # census, stress, fix, round trip and crosscheck on pinned open-source packages
 ```
+
+The repository is an npm workspace with the two packages under [`packages/`](packages). The plugin depends on `@bombadil/hermetic`; in development, TypeScript, ESLint, Vitest and the corpus read its source directly, through the `@bombadil/source` export condition, so nothing needs building first.
 
 `npm run corpus -- effect` also lifts Effect's own source in a checkout of its repository and runs its test suite on the result; add `--unlift` to lift and then unlift it first. `npm run corpus -- bench` times Effect workloads on its original, lifted and unlifted source, and on a second copy of the original that shows the noise. Both need git and pnpm.
 
-`npm run corpus -- report` gathers all of it into `site/data/corpus.json`, and `npm run site` builds the [site](https://bombadil-labs.github.io/hermetic/) from that into `_site/`; every number on its pages comes from the report. `npm run corpus -- records` writes what happened to every function in the corpus to `.corpus/results/records.json`, for looking one up.
+`npm run corpus -- crosscheck` checks every function in the packages' published JavaScript with both `hermetic/sealed` and `check`, and compares what they report. `npm run corpus -- report` gathers all of it into `site/data/corpus.json`, and `npm run site` builds the [site](https://bombadil-labs.github.io/hermetic/) from that into `_site/`; every number on its pages comes from the report. `npm run corpus -- records` writes what happened to every function in the corpus to `.corpus/results/records.json`, for looking one up.
 
-Releases are published to npm from GitHub releases. [RELEASING.md](RELEASING.md) covers the one-time setup and each release.
+Both packages are released together, at one version, from GitHub releases. [RELEASING.md](RELEASING.md) covers the one-time setup and each release.
 
-Development needs Node 22.18 or later, because `eslint.config.js` loads the plugin's TypeScript source directly. The repository lints itself with the rule: the plugin's own hermetic helpers, such as the functions in [`src/ground/ground.ts`](src/ground/ground.ts), are marked `"use hermetic"`.
+Development needs Node 22.18 or later, because `eslint.config.js` loads the plugin's TypeScript source directly. The repository lints itself with the rule: its own hermetic functions are marked `"use hermetic"`, such as the ones in [`packages/hermetic/src/ground.ts`](packages/hermetic/src/ground.ts), and `checkHermetic` in [`packages/hermetic/src/check.ts`](packages/hermetic/src/check.ts), which also passes its own check.
 
 ## License
 

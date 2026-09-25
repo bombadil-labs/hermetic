@@ -217,9 +217,8 @@ function planUnlift(
 /**
  * The names a context provides. The lift passes either an object literal of
  * names, or a module constant of getters that return them and setters that
- * assign them. Getters may bind a host function to `globalThis`, or guard a
- * global that may not exist under `typeof`; unlifted, the name is read bare,
- * as it was.
+ * assign them. A getter may guard a global that may not exist under `typeof`;
+ * unlifted, the name is read bare, as it was.
  */
 function readContext(
   argument: TSESTree.CallExpressionArgument | undefined,
@@ -300,7 +299,7 @@ function readContext(
   return { entries, statement: declaration };
 }
 
-/** The name a generated getter reads: `x`, `x.bind(globalThis)`, or either under a `typeof x` guard. */
+/** The name a generated getter reads: `x`, or `x` under a `typeof x` guard. */
 function getterRead(fn: TSESTree.FunctionExpression, key: string): TSESTree.Identifier | undefined {
   const [only, ...rest] = fn.body.body;
   if (fn.params.length > 0 || rest.length > 0 || only?.type !== AST_NODE_TYPES.ReturnStatement || !only.argument) return undefined;
@@ -323,22 +322,8 @@ function getterRead(fn: TSESTree.FunctionExpression, key: string): TSESTree.Iden
     }
     value = value.alternate;
   }
-  if (
-    value.type === AST_NODE_TYPES.CallExpression &&
-    value.arguments.length === 1 &&
-    value.arguments[0]?.type === AST_NODE_TYPES.Identifier &&
-    value.arguments[0].name === "globalThis" &&
-    value.callee.type === AST_NODE_TYPES.MemberExpression &&
-    !value.callee.computed &&
-    value.callee.property.type === AST_NODE_TYPES.Identifier &&
-    value.callee.property.name === "bind" &&
-    value.callee.object.type === AST_NODE_TYPES.Identifier &&
-    value.callee.object.name === key
-  ) {
-    value = value.callee.object;
-  }
   if (value.type !== AST_NODE_TYPES.Identifier) return undefined;
-  // The wrappers are the lift's own, for the global of the same name; a plain getter may read any name.
+  // A guard is the lift's own, for the global of the same name; a plain getter may read any name.
   return value === only.argument || value.name === key ? value : undefined;
 }
 
@@ -436,6 +421,13 @@ function substituteSite(
     return `'${entry.name}' in the core would reach a different binding`;
   }
 
+  // The lift calls a global the original called bare as `(0, this.name)(…)`; fold it back to `name(…)`.
+  const bare = bareCallee(member, sourceCode);
+  if (bare) {
+    edits.push({ range: bare, text: entry.name });
+    return undefined;
+  }
+
   // The lift expands `{ name }` to `{ name: this.name }`; fold it back.
   const property = member.parent.type === AST_NODE_TYPES.AssignmentPattern ? member.parent.parent : member.parent;
   const value = member.parent.type === AST_NODE_TYPES.AssignmentPattern ? member.parent : member;
@@ -453,6 +445,22 @@ function substituteSite(
     edits.push({ range: member.range, text: entry.name });
   }
   return undefined;
+}
+
+/** The range of `(0, member)` when it is called as a callee or a tag, the form the lift writes for a bare call. */
+function bareCallee(member: TSESTree.MemberExpression, sourceCode: SourceCode): [number, number] | undefined {
+  const sequence = member.parent;
+  if (sequence.type !== AST_NODE_TYPES.SequenceExpression || sequence.expressions.length !== 2) return undefined;
+  const [zero, last] = sequence.expressions;
+  if (last !== member || zero?.type !== AST_NODE_TYPES.Literal || zero.value !== 0 || zero.raw !== "0") return undefined;
+  const call = sequence.parent;
+  const called =
+    (call.type === AST_NODE_TYPES.CallExpression && call.callee === sequence) ||
+    (call.type === AST_NODE_TYPES.TaggedTemplateExpression && call.tag === sequence);
+  const open = sourceCode.getTokenBefore(sequence);
+  const close = sourceCode.getTokenAfter(sequence);
+  if (!called || open?.value !== "(" || close?.value !== ")") return undefined;
+  return [open.range[0], close.range[1]];
 }
 
 /** Whether `member` is written: assigned, updated, destructured into, or deleted. */

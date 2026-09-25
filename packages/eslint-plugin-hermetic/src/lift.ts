@@ -11,9 +11,10 @@ const LIFTABLE: ReadonlySet<MessageIds> = new Set(["freeVariable"]);
 
 /**
  * The functions and constructors ECMAScript puts on the global object. Called
- * without `new`, each ignores its receiver, so the core can call one through
- * `this` as it is, with its own properties, such as `Number.isNaN`. A host
- * function, such as `fetch`, may need the global object as its receiver.
+ * without `new`, each ignores its receiver, so the core calls one as
+ * `this.Number(x)`. Any other global the function calls without a receiver,
+ * such as `fetch`, may look at its `this`, so the core calls it without one
+ * too, as `(0, this.fetch)(url)`.
  */
 const ECMASCRIPT_FUNCTIONS: ReadonlySet<string> = new Set([
   "AggregateError", "Array", "ArrayBuffer", "BigInt", "BigInt64Array", "BigUint64Array", "Boolean", "DataView", "Date",
@@ -30,11 +31,6 @@ interface Lifted {
   readonly global: boolean;
   /** Written by the function, so the context needs a setter. */
   writable: boolean;
-  /**
-   * A host function called without a receiver. It may need the global object
-   * as its receiver, so the context binds it to `globalThis`.
-   */
-  callsHost: boolean;
   /** A global read under `typeof`, which must not throw when the global does not exist. */
   guarded: boolean;
   /**
@@ -91,7 +87,6 @@ export type LiftBlocker =
   | "a const enum"
   | "a declaration that reads unsettled names"
   | "a direct eval"
-  | "calls a host function and reads it as a value"
   | "another escape";
 
 /**
@@ -151,27 +146,19 @@ export function tryLift(
 
   const lifted = new Map<string, Lifted>();
   const identifiers: TSESTree.Identifier[] = [];
-  // Globals read other than by calling them bare or under typeof, where a bound function would differ.
-  const readAsValues = new Set<string>();
   for (const reference of references) {
     const entry = classify(reference, site, assumptions);
     if (typeof entry === "string") return entry;
     if (!readsCoreThis(reference.identifier, fn)) return "a lifted name inside a nested function or class";
-    if (entry.global && !isBareCall(reference.identifier) && !entry.guarded) readAsValues.add(entry.name);
     const existing = lifted.get(entry.name);
     if (existing) {
       existing.writable ||= entry.writable;
-      existing.callsHost ||= entry.callsHost;
       existing.guarded ||= entry.guarded;
       existing.direct &&= entry.direct;
     } else {
       lifted.set(entry.name, entry);
     }
     identifiers.push(reference.identifier as TSESTree.Identifier);
-  }
-  // A bound function has none of the original's own properties, and isn't the same value.
-  if ([...lifted.values()].some((entry) => entry.callsHost && readAsValues.has(entry.name))) {
-    return "calls a host function and reads it as a value";
   }
   const direct = [...lifted.values()].every((entry) => entry.direct);
   // A function declaration can run before any statement of its module, a shared context's included.
@@ -372,6 +359,14 @@ function usesOwnReceiver(fn: FunctionNode, env: Environment): boolean {
   return found;
 }
 
+/**
+ * True when the core must call `identifier` without a receiver, as the original
+ * did: a global other than ECMAScript's own functions, called bare.
+ */
+function callsWithoutReceiver(identifier: TSESTree.Identifier, entry: Lifted | undefined): boolean {
+  return entry?.global === true && isBareCall(identifier) && !ECMASCRIPT_FUNCTIONS.has(identifier.name);
+}
+
 /** True when `identifier` is called without a receiver: `f()`, or a tagged template. */
 function isBareCall(identifier: TSESTree.Node): boolean {
   const parent = identifier.parent;
@@ -399,16 +394,14 @@ function classify(reference: Reference, site: LiftSite, assumptions: LiftAssumpt
   // No definition, or only `declare` statements describing it: a global.
   if (!variable || variable.defs.every(isAmbient)) {
     if (reference.isWrite()) return "writes a constant or import";
-    const called = isBareCall(identifier);
     // A bare call to eval is a direct eval, which sees the caller's scope. Called through `this`, it wouldn't.
-    if (called && name === "eval") return "a direct eval";
+    if (name === "eval" && isBareCall(identifier)) return "a direct eval";
     const parent = identifier.parent;
     return {
       name,
       global: true,
       writable: false,
       direct: false,
-      callsHost: called && !ECMASCRIPT_FUNCTIONS.has(name),
       guarded: parent.type === AST_NODE_TYPES.UnaryExpression && parent.operator === "typeof",
     };
   }
@@ -420,7 +413,6 @@ function classify(reference: Reference, site: LiftSite, assumptions: LiftAssumpt
     name,
     global: false,
     writable: reference.isWrite(),
-    callsHost: false,
     guarded: false,
     direct: !reference.isWrite() && isSettled(variable, site, assumptions),
     widened: widenedType(variable),
@@ -573,7 +565,11 @@ export function liftFix(
 
   const edits: Edit[] = plan.identifiers.map((identifier) => ({
     range: identifier.range,
-    text: isShorthandValue(identifier) ? `${identifier.name}: this.${identifier.name}` : `this.${identifier.name}`,
+    text: isShorthandValue(identifier)
+      ? `${identifier.name}: this.${identifier.name}`
+      : callsWithoutReceiver(identifier, plan.lifted.get(identifier.name))
+        ? `(0, this.${identifier.name})`
+        : `this.${identifier.name}`,
   }));
   if (typescript) {
     for (const identifier of plan.identifiers) {
@@ -732,8 +728,7 @@ function contextMemberType(entry: Lifted): string {
 
 function contextMembers(entry: Lifted, typescript: boolean): string[] {
   const { name } = entry;
-  let value = entry.callsHost ? `${name}.bind(globalThis)` : name;
-  if (entry.guarded) value = `typeof ${name} === "undefined" ? undefined : ${value}`;
+  const value = entry.guarded ? `typeof ${name} === "undefined" ? undefined : ${name}` : name;
   const members = [`get ${name}()${typescript ? `: ${contextMemberType(entry)}` : ""} { return ${value}; },`];
   if (entry.writable) {
     const param = name === "value" ? "next" : "value";

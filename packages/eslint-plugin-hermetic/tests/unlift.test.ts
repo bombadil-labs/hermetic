@@ -36,11 +36,12 @@ describe("unlift undoes the lift exactly", () => {
     ].join("\n"),
     "state, host functions, built-ins and a guarded global, through a shared context": [
       `let calls = 0;`,
-      `declare const hostFn: () => number;`,
+      `declare const hostFn: { (): number; version: number };`,
+      `declare const hostTag: (strings: TemplateStringsArray) => string;`,
       `export const probe = (n: number) => {`,
       `  calls += n;`,
       `  const seen = typeof window === "undefined" ? 0 : 1;`,
-      `  return [calls, hostFn(), seen, Date.now() > 0, Number(n), Number.isFinite(n)];`,
+      `  return [calls, hostFn(), hostFn?.(), hostFn.version, hostTag\`n\`, seen, Date.now() > 0, Number(n), Number.isFinite(n)];`,
       `};`,
     ].join("\n"),
     "expression bodies with parentheses and comments": [

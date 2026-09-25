@@ -59,11 +59,6 @@ export function f(a: number) { return clamp(a); }`, options: lift },
       options: lift,
     },
     {
-      name: "a host function called bare and read as a value, which a bound function would change",
-      code: `declare const hostFn: { (): number; version: number };\nexport const f = () => hostFn() + hostFn.version;`,
-      options: lift,
-    },
-    {
       name: "a default that calls a function, which the core would call again if it returned undefined",
       code: `const R = 1;\ndeclare function fallback(): undefined;\nexport const f = (x = fallback()) => [x, R];`,
       options: lift,
@@ -429,8 +424,13 @@ describe("lift semantics", () => {
       probe: "probe",
     },
     {
-      name: "a host function called bare keeps a global receiver",
-      code: `(globalThis as any).hostFn = function (this: unknown) { return this === undefined || this === globalThis; };\ndeclare const hostFn: () => boolean;\nconst callHost = () => hostFn();\nconst probe = () => [callHost()];`,
+      name: "a host function called bare still gets no receiver",
+      code: `(globalThis as any).hostFn = function (this: unknown) { "use strict"; return this === undefined; };\ndeclare const hostFn: () => boolean;\nconst callHost = () => hostFn();\nconst probe = () => [callHost()];`,
+      probe: "probe",
+    },
+    {
+      name: "a host function called bare and read as a value keeps its properties and identity",
+      code: `(globalThis as any).hostFn = Object.assign(function (this: unknown) { "use strict"; return this === undefined; }, { version: 2 });\ndeclare const hostFn: { (): boolean; version: number };\nconst f = () => [hostFn(), hostFn.version, hostFn === (globalThis as any).hostFn, typeof hostFn];\nconst probe = () => [f()];`,
       probe: "probe",
     },
     {
@@ -470,6 +470,12 @@ describe("lift semantics", () => {
       expect((after[probe] as () => unknown)()).toEqual((before[probe] as () => unknown)());
     });
   }
+
+  it("calls a host function without a receiver, and passes it unbound", () => {
+    const { output } = fix(`declare const hostFn: { (): number; version: number };\nexport const f = () => hostFn() + hostFn.version;`);
+    expect(output).toContain("(0, this.hostFn)() + this.hostFn.version");
+    expect(output).toContain("get hostFn(): typeof hostFn { return hostFn; }");
+  });
 
   it("preserves async behavior", async () => {
     const code = `const OFFSET = 5;\nconst later = async (x: number) => x + OFFSET;`;

@@ -51,10 +51,7 @@ export function confine<F extends FunctionLike = (...args: unknown[]) => unknown
   const { Compartment, harden } = hardenedJs();
   const source = typeof fn === "function" ? Function.prototype.toString.call(fn) : fn;
   const result = check(source);
-  if (!result.hermetic) {
-    const found = result.problems.map((problem) => `${explain(problem)} (at ${problem.start})`);
-    throw new HermeticError(`Not hermetic: ${found.join("; ")}.`, source, result.problems);
-  }
+  if (!result.hermetic) throw notHermetic(source, result.problems);
 
   // Empty the global object, then freeze it, so the function can keep nothing
   // there between calls. Only undefined, NaN and Infinity can't be deleted.
@@ -79,6 +76,12 @@ function hardenedJs(): HardenedJs {
     throw new Error("confine needs Hardened JS: install ses, import it, and call lockdown() before confining a function.");
   }
   return { Compartment, harden };
+}
+
+/** The error for a function that isn't hermetic, naming each problem and where it is. */
+export function notHermetic(source: string, problems: readonly Problem[]): HermeticError {
+  const found = problems.map((problem) => `${explain(problem)} (at ${problem.start})`);
+  return new HermeticError(`Not hermetic: ${found.join("; ")}.`, source, problems);
 }
 
 function explain(problem: Problem): string {

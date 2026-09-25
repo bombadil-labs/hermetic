@@ -16,7 +16,7 @@ describe("check: forms", () => {
     ["a generator", "function* (a) { yield a }"],
     ["an async generator", "async function* (a) { yield await a }"],
   ])("reads %s as a function", (_label, source) => {
-    expect(check(source)).toEqual({ form: "function", marked: false, hermetic: true, problems: [] });
+    expect(check(source)).toEqual({ form: "function", marked: false, hermetic: true, problems: [], needs: [] });
   });
 
   it.each([
@@ -235,6 +235,61 @@ describe("check: this, super and the module", () => {
   });
 });
 
+describe("check: needs", () => {
+  const needs = (source: string) => check(source).needs;
+
+  it("lists the names a function reads from this, in the order it first reads them", () => {
+    expect(needs("function (a) { return this.round(this.rate * a) + this.round(a) }")).toEqual(["round", "rate"]);
+  });
+
+  it("lists names taken by destructuring this", () => {
+    expect(needs('function () { const { clamp, "rate": r } = this; return clamp(r) }')).toEqual(["clamp", "rate"]);
+    expect(needs("function () { let clock; ({ clock } = this); return clock.now() }")).toEqual(["clock"]);
+  });
+
+  it("counts writes, updates and deletes, which touch a name too", () => {
+    expect(needs("function () { this.count++; this.total = 0; delete this.cache }")).toEqual(["count", "total", "cache"]);
+  });
+
+  it("follows this into arrow functions, class heritage and computed keys, which share it", () => {
+    expect(needs("function (xs) { return xs.map((x) => this.scale * x) }")).toEqual(["scale"]);
+    expect(needs("function () { return class extends this.Base { [this.key]() {} } }")).toEqual(["Base", "key"]);
+  });
+
+  it("leaves out this where a nested function, method, field or static block binds its own", () => {
+    const source = "function () { return [function () { return this.a }, { m() { return this.b } }, class { c = this.c; static { this.d } }] }";
+    expect(needs(source)).toEqual([]);
+  });
+
+  it.each([
+    ["a computed name", "function (key) { return this[key] }"],
+    ["this passed along", "function (helper) { return helper(this) }"],
+    ["this kept in a variable", "function () { const self = this; return self.a }"],
+    ["a rest element", "function () { const { a, ...rest } = this; return rest }"],
+    ["a computed key in a pattern", "function (k) { const { [k]: v } = this; return v }"],
+    ["this spread", "function () { return { ...this } }"],
+    ["this under typeof", "function () { return typeof this }"],
+  ])("can't list what a function reads through %s", (_label, source) => {
+    expect(needs(source)).toBeUndefined();
+  });
+
+  it("lists nothing for an arrow function, whose this isn't one of its inputs", () => {
+    expect(check("() => this.a")).toMatchObject({ hermetic: false, needs: [] });
+    expect(needs("(a) => a.b")).toEqual([]);
+  });
+
+  it("gives no list for a method, a class or source that isn't a function", () => {
+    expect(needs("area() { return this.w * this.h }")).toBeUndefined();
+    expect(needs("class { m() { return this.a } }")).toBeUndefined();
+    expect(needs("function (a {")).toBeUndefined();
+  });
+
+  it("lists the names whether or not the function is hermetic", () => {
+    expect(check("function () { return this.a + b }")).toMatchObject({ hermetic: false, needs: ["a"] });
+    expect(check('function (key) { "use hermetic"; return this[key] }')).toMatchObject({ hermetic: true, needs: undefined });
+  });
+});
+
 describe("check: offsets", () => {
   it.each([
     ["an arrow function", "(a) => a + missing"],
@@ -252,7 +307,7 @@ describe("checkHermetic", () => {
   };
 
   it("is itself marked and hermetic: it reads no globals either", () => {
-    expect(check(checkHermetic)).toEqual({ form: "function", marked: true, hermetic: true, problems: [] });
+    expect(check(checkHermetic)).toEqual({ form: "function", marked: true, hermetic: true, problems: [], needs: ["parse"] });
   });
 
   it("works when evaluated from its source alone and bound to a parser", () => {

@@ -2,9 +2,10 @@
 
 **A hermetic function reads nothing but its inputs: its arguments, including `this`.** It reads no globals, not even built-ins such as `Math`; the code that binds it passes in what it needs. This package works with hermetic functions at runtime, from their source, with no ESLint:
 
-- `check` reads a function's source and reports everything it reads besides its inputs.
+- `check` reads a function's source and reports everything it reads besides its inputs, and the names it reads from `this`.
 - `confine` runs a hermetic function in a [Hardened JS](https://hardenedjs.org/) compartment whose global object is empty.
 - `intrinsics` picks the deterministic built-ins out of a realm, for bindings to pass in.
+- `inject`, which is optional and has its own entry point, binds a hermetic function to exactly the names it reads.
 
 The ESLint rules, which check functions as you write them and rewrite existing ones to be hermetic, are in [`@bombadil/eslint-plugin-hermetic`](https://www.npmjs.com/package/@bombadil/eslint-plugin-hermetic). The [repository's README](https://github.com/bombadil-labs/hermetic#readme) explains what hermetic functions are for.
 
@@ -23,13 +24,14 @@ import { check } from "@bombadil/hermetic";
 
 check(`function applyDiscount(invoice) {
   "use hermetic";
-  return { ...invoice, total: invoice.total * (1 - rate) };
+  return { ...invoice, total: this.clamp(invoice.total * (1 - rate)) };
 }`);
 // {
 //   form: "function",
 //   marked: true,
 //   hermetic: false,
-//   problems: [{ kind: "freeVariable", name: "rate", start: 103, end: 107 }],
+//   problems: [{ kind: "freeVariable", name: "rate", start: 114, end: 118 }],
+//   needs: ["clamp"],
 // }
 ```
 
@@ -52,6 +54,7 @@ The result:
 - **`marked`**: the function's body starts with a `"use hermetic"` directive. A JSDoc `@hermetic` tag comes before a function, not inside it, so it isn't part of the source and doesn't count here.
 - **`hermetic`**: it is a function, and `check` found no problems. `marked` and `hermetic` are separate: the directive says the function should be hermetic, and `check` tests whether it is.
 - **`problems`**: in source order, with offsets into the source.
+- **`needs`**: the names the function reads from `this`, whether as `this.clamp` or as `const { clamp } = this`, in the order it first reads them. For a hermetic function, that's everything it needs from the code that binds it. It's undefined when the function uses `this` in a way that doesn't name what it reads, as in `this[key]` or `helper(this)`, and for anything but a function. An arrow function needs nothing, since its `this` isn't one of its inputs.
 
 `check` reports what `hermetic/sealed` reports. On the 14,416 functions and methods in the published JavaScript of Effect 3.22.2, RxJS 7.8.2 and TanStack Query 5.103.2, the two report the same problems at the same places, every one. (Class constructors aren't counted: a constructor's source is its whole class.) `npm run corpus -- crosscheck` in the repository reproduces this.
 
@@ -92,6 +95,8 @@ Two rules keep this sound:
 
 A replaced value is visible where it's bound, and TypeScript checks it against the function's `this` type. Neither the ESLint rules nor `check` need to know what a name means anywhere else, because a hermetic function names nothing outside itself.
 
+Binding by hand, as above, is all a hermetic function needs. [`inject`](#inject) is an optional helper for the same job.
+
 ### intrinsics
 
 `intrinsics(realm)` picks the deterministic built-ins out of `realm`:
@@ -108,6 +113,22 @@ A replaced value is visible where it's bound, and TypeScript checks it against t
 | Locale | | `Intl` (depends on the host's locale) |
 
 Pass it `globalThis`, or under Hardened JS a new compartment's global object, whose clock and `Math.random` already throw. It freezes the object it returns, but the built-ins in it are only frozen under Hardened JS. It is itself hermetic.
+
+### inject
+
+`inject` is one way to do the binding, and an optional one, so it has its own entry point. It binds a hermetic function to a frozen object that holds exactly the names the function reads from `this`, taken from an environment that may hold more:
+
+```ts
+import { inject } from "@bombadil/hermetic/inject";
+
+export const cents = inject(toCents, root); // toCents gets a frozen { Math }, and nothing else
+```
+
+- It reads each name from the environment once, when it binds.
+- It throws a `HermeticError` when the function isn't hermetic, when `check` can't list its `needs`, or when the environment lacks one of them.
+- In TypeScript, the result keeps the function's type parameters, and the environment is checked against the function's `this` type. An overloaded function keeps only its last signature, as it does with `bind`.
+
+Any object can be the environment, so a DI container can supply one. Awilix's `container.cradle` works as it is: it reports its registrations as own properties, and `inject` resolves only the names the function reads. With a container that resolves by token, such as tsyringe or InversifyJS, resolve what the function needs into an object first.
 
 ## confine
 
@@ -146,7 +167,7 @@ Whatever you pass to a confined function is still its to use and change, so hard
 
 ## checkHermetic
 
-`check` binds acorn to `checkHermetic`, which does the work. `checkHermetic` is itself hermetic: its parser comes in through `this`, every helper is nested inside it, and it reads no globals. Its source is complete on its own, so it can be sent to another runtime and bound there. It passes its own check, and runs under `confine`:
+`check` binds acorn to `checkHermetic`, which does the work. `checkHermetic` is itself hermetic: its parser comes in through `this`, every helper is nested inside it, and it reads no globals. Its source is complete on its own, so it can be sent to another runtime and bound there. It passes its own check, which lists its `needs` as `["parse"]`, and runs under `confine`:
 
 ```ts
 import { checkHermetic, confine } from "@bombadil/hermetic";
@@ -169,6 +190,8 @@ function check(fn: string | FunctionLike): CheckResult;
 function checkHermetic(this: CheckContext, source: string): CheckResult;
 function confine<F extends FunctionLike>(fn: string | F): F;
 function intrinsics(realm: typeof globalThis): Intrinsics;
+// From "@bombadil/hermetic/inject":
+function inject<T, A extends unknown[], R>(fn: (this: T, ...args: A) => R, env: NoInfer<T>): (...args: A) => R;
 class HermeticError extends Error {
   readonly source: string;
   readonly problems: readonly Problem[];
@@ -180,6 +203,7 @@ interface CheckResult {
   marked: boolean;
   hermetic: boolean;
   problems: readonly Problem[];
+  needs: readonly string[] | undefined;
 }
 interface Problem {
   kind: ProblemKind;

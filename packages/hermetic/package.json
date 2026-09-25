@@ -22,6 +22,11 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./inject": {
+      "@bombadil/source": "./src/inject.ts",
+      "types": "./dist/inject.d.ts",
+      "default": "./dist/inject.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

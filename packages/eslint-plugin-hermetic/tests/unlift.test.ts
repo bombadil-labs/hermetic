@@ -136,6 +136,25 @@ describe("unlift undoes the lift exactly", () => {
     expect(unlift(lifted, "module.js").code).toBe(`const RATE = 0.1;\nexport const apply = (total) => total * (1 - RATE);`);
   });
 
+  it("a shared context written as an object literal, as earlier versions of the lift wrote it", () => {
+    const lifted = [
+      `let count = 0;`,
+      `export const bump = (by: number) => bumpHermetic.call(bumpContext, by);`,
+      ``,
+      `const bumpContext = {`,
+      `  get count(): typeof count { return count; },`,
+      `  set count(value: typeof count) { count = value; },`,
+      `};`,
+      ``,
+      `function bumpHermetic(this: { count: typeof count }, by: number) {`,
+      `  "use hermetic";`,
+      `  this.count += by;`,
+      `  return this.count;`,
+      `}`,
+    ].join("\n");
+    expect(unlift(lifted).code).toBe(`let count = 0;\nexport const bump = (by: number) => {\n  count += by;\n  return count;\n};`);
+  });
+
   it("leaves hermetic functions and everything else as they are", () => {
     const code = [
       `function f(a: number) {\n  "use hermetic";\n  return a + 1;\n}`,
@@ -164,12 +183,22 @@ describe("unlift leaves bindings it cannot undo exactly", () => {
     {
       name: "a context that is neither a literal nor a constant",
       code: `const R = 1;\nexport const f = () => fHermetic.call(undefined);\n${core("return 1;")}`,
-      reason: "the context is not a module constant holding an object literal",
+      reason: "the context is not a module constant holding an object",
     },
     {
       name: "a getter that does more than read",
       code: `let reads = 0;\nconst R = 1;\nexport const f = () => fHermetic.call(fContext);\nconst fContext = {\n  get R() { reads++; return R; },\n};\n${core("return this.R;")}`,
       reason: "the context's accessor for 'R' does more than read or write a name",
+    },
+    {
+      name: "a class context with a field",
+      code: `const R = 1;\nexport const f = () => fHermetic.call(fContext);\nconst fContext = new (class {\n  R = R;\n})();\n${core("return this.R;")}`,
+      reason: "a context member is not a plain accessor",
+    },
+    {
+      name: "a class context that extends another class",
+      code: `const R = 1;\nexport const f = () => fHermetic.call(fContext);\nconst fContext = new (class extends Object {\n  get R() { return R; }\n})();\n${core("return this.R;")}`,
+      reason: "the context is not a module constant holding an object",
     },
     {
       name: "a core that passes this along",

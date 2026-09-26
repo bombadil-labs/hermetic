@@ -389,7 +389,8 @@ function classify(reference: Reference, site: LiftSite, assumptions: LiftAssumpt
   const identifier = reference.identifier;
   if (identifier.type !== AST_NODE_TYPES.Identifier) return "not declared at module level";
   const name = identifier.name;
-  if (name === "arguments" || name === "__proto__") return "uses its own this, arguments or new.target";
+  // A context can't pass these: `this.__proto__` reads its prototype, and a class can't have a `constructor` accessor.
+  if (name === "arguments" || name === "__proto__" || name === "constructor") return "uses its own this, arguments or new.target";
   const variable = reference.resolved;
   // No definition, or only `declare` statements describing it: a global.
   if (!variable || variable.defs.every(isAmbient)) {
@@ -550,7 +551,9 @@ export function isBinding(fn: FunctionNode, sourceCode: SourceCode): boolean {
  * export, and calls a hermetic core, declared right after, with a context.
  * The context is an object literal of the lifted values when they are all
  * settled, and otherwise one object, created once, whose getters read each
- * lifted binding when the core does.
+ * lifted binding when the core does. That object is an instance of a class:
+ * V8 keeps an object literal with getters in dictionary mode, where reading a
+ * property costs several times as much.
  */
 export function liftFix(
   fixer: TSESLint.RuleFixer,
@@ -648,7 +651,7 @@ export function liftFix(
   const declarations = [core];
   if (plan.contextName) {
     const members = lifted.flatMap((entry) => contextMembers(entry, typescript)).map((line) => `${base}${unit}${line}`);
-    declarations.unshift([`const ${plan.contextName} = {`, ...members, `${base}};`].join("\n"));
+    declarations.unshift([`const ${plan.contextName} = new (class {`, ...members, `${base}})();`].join("\n"));
   }
   const at = declarationSite(plan.statement, sourceCode);
   return [
@@ -729,10 +732,10 @@ function contextMemberType(entry: Lifted): string {
 function contextMembers(entry: Lifted, typescript: boolean): string[] {
   const { name } = entry;
   const value = entry.guarded ? `typeof ${name} === "undefined" ? undefined : ${name}` : name;
-  const members = [`get ${name}()${typescript ? `: ${contextMemberType(entry)}` : ""} { return ${value}; },`];
+  const members = [`get ${name}()${typescript ? `: ${contextMemberType(entry)}` : ""} { return ${value}; }`];
   if (entry.writable) {
     const param = name === "value" ? "next" : "value";
-    members.push(`set ${name}(${param}${typescript ? `: typeof ${name}` : ""}) { ${name} = ${param}; },`);
+    members.push(`set ${name}(${param}${typescript ? `: typeof ${name}` : ""}) { ${name} = ${param}; }`);
   }
   return members;
 }

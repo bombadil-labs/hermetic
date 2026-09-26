@@ -53,9 +53,9 @@ export function half(amount: number) {
 
 export const round = (amount: number) => roundHermetic.call(roundContext, amount);
 
-const roundContext = {
-  get Math(): typeof Math { return Math; },
-};
+const roundContext = new (class {
+  get Math(): typeof Math { return Math; }
+})();
 
 function roundHermetic(this: { Math: typeof Math }, amount: number) {
   "use hermetic";
@@ -72,11 +72,11 @@ function toCentsHermetic(this: { round: typeof round; units: typeof units }, dol
 
 export const discount = (dollars: number, rate = 0.2) => discountHermetic.call(discountContext, dollars, rate);
 
-const discountContext = {
-  get discounts(): typeof discounts { return discounts; },
-  set discounts(value: typeof discounts) { discounts = value; },
-  get toCents(): typeof toCents { return toCents; },
-};
+const discountContext = new (class {
+  get discounts(): typeof discounts { return discounts; }
+  set discounts(value: typeof discounts) { discounts = value; }
+  get toCents(): typeof toCents { return toCents; }
+})();
 
 function discountHermetic(this: { discounts: typeof discounts; toCents: typeof toCents }, dollars: number, rate = 0.2) {
   "use hermetic";
@@ -98,7 +98,7 @@ The wrapper keeps the function's name, type parameters, parameters, defaults, re
 The wrapper passes `this` in one of two forms:
 
 - **Directly**, as in `toCents`, when every lifted value is *settled*: initialized whenever the wrapper can run, and never reassigned. Function declarations and namespace imports are always settled, and so are constants and classes declared above a wrapper that isn't hoisted.
-- **Through a shared context object**, as in `round` and `discount`, otherwise. Globals always go this way, since other code can replace or remove them. The object is created once, right after the wrapper. Its getters read each value when the hermetic function does, and its setters write assignments back. A wrapper that isn't hoisted can't run before its own statement, and the context object's statement comes right after it, so the object always exists when the wrapper runs.
+- **Through a shared context object**, as in `round` and `discount`, otherwise. Globals always go this way, since other code can replace or remove them. The object is created once, right after the wrapper. Its getters read each value when the hermetic function does, and its setters write assignments back. A wrapper that isn't hoisted can't run before its own statement, and the context object's statement comes right after it, so the object always exists when the wrapper runs. The object is an instance of a class, because V8 keeps an object literal with getters in dictionary mode, where each read costs several times as much.
 
 A function declaration is hoisted. It can run before any statement of its module, and in an import cycle, before its imports are initialized. So a declaration is only lifted when its values can be passed directly.
 

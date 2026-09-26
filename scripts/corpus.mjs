@@ -24,6 +24,11 @@
 //   npm run corpus -- effect --bind   Effect's test suite on its lifted and rebound source
 //   npm run corpus -- bench --bind    the benchmark, with a rebound copy next to the lifted one
 //
+// Another: the lift with its shared contexts written as object literals of
+// getters, as it wrote them before (scripts/literal-contexts.mjs).
+//
+//   npm run corpus -- bench --literal the benchmark, with that copy next to the lifted one
+//
 // Library code is one particular shape: few globals, many small helpers, heavy
 // use of namespace imports. Application code reaches for more ambient
 // authority (fetch, Date, process) and has more classes and components, so
@@ -43,6 +48,7 @@ import { unlift } from "../packages/eslint-plugin-hermetic/src/unlift.ts";
 import { functionName, isFunctionNode, isMarkedHermetic, isMethod } from "../packages/eslint-plugin-hermetic/src/marking.ts";
 import { isCandidate } from "../packages/eslint-plugin-hermetic/src/rules/prefer-hermetic.ts";
 import { check } from "@bombadil/hermetic";
+import { toLiteralContexts } from "./literal-contexts.mjs";
 import { rebind } from "./rebind.mjs";
 
 const PACKAGES = {
@@ -507,6 +513,18 @@ function effectCheckout() {
 
 const shell = process.platform === "win32";
 
+/** Rewrites every shared context under `dir` as an object literal, in place: the experiment in scripts/literal-contexts.mjs. */
+function literalContextsInPlace(dir) {
+  let converted = 0;
+  for (const file of sourceFiles(dir)) {
+    const result = toLiteralContexts(fs.readFileSync(file, "utf8"), file);
+    if (result.converted === 0) continue;
+    converted += result.converted;
+    fs.writeFileSync(file, result.code);
+  }
+  return converted;
+}
+
 /** Rebinds every lifted source file under `dir` in place: the experiment in scripts/rebind.mjs. */
 function rebindInPlace(dir) {
   let rebound = 0;
@@ -658,12 +676,16 @@ function runBench(options = {}) {
   const packageDir = path.join(checkout, "packages/effect");
   const benchDir = path.join(packageDir, ".hermetic-bench");
   fs.rmSync(benchDir, { recursive: true, force: true });
-  const trees = options.bind ? ["original", "lifted", "bound", "control"] : ["original", "lifted", "unlifted", "control"];
+  const variant = options.bind ? "bound" : options.literal ? "literal" : "unlifted";
+  const trees = ["original", "lifted", variant, "control"];
   for (const tree of trees) fs.cpSync(path.join(packageDir, "src"), path.join(benchDir, tree), { recursive: true });
   fixInPlace(path.join(benchDir, "lifted"));
   if (options.bind) {
     fixInPlace(path.join(benchDir, "bound"));
     console.log(`\nBenchmark: ${rebindInPlace(path.join(benchDir, "bound"))} bindings rebound in the bound copy`);
+  } else if (options.literal) {
+    fixInPlace(path.join(benchDir, "literal"));
+    console.log(`\nBenchmark: ${literalContextsInPlace(path.join(benchDir, "literal"))} shared contexts written as object literals in the literal copy`);
   } else {
     fixInPlace(path.join(benchDir, "unlifted"));
     const { folded, skipped } = unliftInPlace(path.join(benchDir, "unlifted"));
@@ -682,7 +704,7 @@ function runBench(options = {}) {
   }
   const result = { date: new Date().toISOString(), ...provenance(), node: process.version, processes: trees.length, samples: BENCH_SAMPLES, workloads: best };
   fs.mkdirSync(resultsDir, { recursive: true });
-  fs.writeFileSync(path.join(resultsDir, options.bind ? "bench-bind.json" : "bench.json"), `${JSON.stringify(result, null, 2)}\n`);
+  fs.writeFileSync(path.join(resultsDir, variant === "unlifted" ? "bench.json" : `bench-${variant === "bound" ? "bind" : variant}.json`), `${JSON.stringify(result, null, 2)}\n`);
   console.log(`  ${"workload".padEnd(26)}${trees.map((tree) => tree.padStart(18)).join("")}`);
   for (const [workload, times] of Object.entries(best)) {
     const cells = trees.map((tree) => {
@@ -956,7 +978,7 @@ if (command === "fix" || command === "all") runFix();
 if (command === "roundtrip" || command === "all") runRoundtrip();
 if (command === "crosscheck" || command === "all") runCrosscheck();
 if (command === "effect") runEffect({ unlift: process.argv.includes("--unlift"), bind: process.argv.includes("--bind") });
-if (command === "bench") runBench({ bind: process.argv.includes("--bind") });
+if (command === "bench") runBench({ bind: process.argv.includes("--bind"), literal: process.argv.includes("--literal") });
 if (command === "bind") runBind();
 if (command === "records") runRecords();
 if (command === "report") runReport();

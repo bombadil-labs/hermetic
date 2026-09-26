@@ -228,9 +228,11 @@ function planUnlift(
 
 /**
  * The names a context provides. The lift passes either an object literal of
- * names, or a module constant of getters that return them and setters that
- * assign them. A getter may guard a global that may not exist under `typeof`;
- * unlifted, the name is read bare, as it was.
+ * names, or a module constant, an instance of a class of getters that return
+ * them and setters that assign them. Earlier versions of the lift wrote that
+ * constant as an object literal of the same accessors. A getter may guard a
+ * global that may not exist under `typeof`; unlifted, the name is read bare,
+ * as it was.
  */
 function readContext(
   argument: TSESTree.CallExpressionArgument | undefined,
@@ -270,28 +272,23 @@ function readContext(
     declaration?.type !== AST_NODE_TYPES.VariableDeclaration ||
     declaration.kind !== "const" ||
     declaration.declarations.length !== 1 ||
-    declaration.parent.type !== AST_NODE_TYPES.Program ||
-    def.node.init?.type !== AST_NODE_TYPES.ObjectExpression
+    declaration.parent.type !== AST_NODE_TYPES.Program
   ) {
-    return "the context is not a module constant holding an object literal";
+    return "the context is not a module constant holding an object";
   }
+  const members = def.node.init?.type === AST_NODE_TYPES.ObjectExpression ? def.node.init.properties : classMembers(def.node.init);
+  if (!members) return "the context is not a module constant holding an object";
   if (variable?.references.some((reference) => !reference.init && reference.identifier !== argument)) {
     return "the context is used elsewhere";
   }
   const getters = new Map<string, TSESTree.Identifier>();
   const setters = new Map<string, TSESTree.Identifier>();
-  for (const property of def.node.init.properties) {
-    if (
-      property.type !== AST_NODE_TYPES.Property ||
-      property.computed ||
-      property.key.type !== AST_NODE_TYPES.Identifier ||
-      property.value.type !== AST_NODE_TYPES.FunctionExpression
-    ) {
-      return "a context member is not a plain accessor";
-    }
-    const key = property.key.name;
-    const read = property.kind === "get" ? getterRead(property.value, key) : undefined;
-    const written = property.kind === "set" ? setterWrite(property.value) : undefined;
+  for (const member of members) {
+    const accessor = accessorOf(member);
+    if (!accessor) return "a context member is not a plain accessor";
+    const { key, kind, fn } = accessor;
+    const read = kind === "get" ? getterRead(fn, key) : undefined;
+    const written = kind === "set" ? setterWrite(fn) : undefined;
     if (read) getters.set(key, read);
     else if (written) setters.set(key, written);
     else return `the context's accessor for '${key}' does more than read or write a name`;
@@ -309,6 +306,27 @@ function readContext(
     if (!getters.has(key)) return `the context can write '${key}' but not read it`;
   }
   return { entries, statement: declaration };
+}
+
+/** The members of `new (class { … })()`: an anonymous class that extends nothing, constructed with no arguments. */
+function classMembers(init: TSESTree.Expression | null | undefined): TSESTree.ClassElement[] | undefined {
+  if (init?.type !== AST_NODE_TYPES.NewExpression || init.arguments.length > 0 || init.typeArguments) return undefined;
+  const cls = init.callee;
+  if (cls.type !== AST_NODE_TYPES.ClassExpression || cls.id || cls.superClass || cls.typeParameters) return undefined;
+  if (cls.decorators.length > 0 || cls.implements.length > 0) return undefined;
+  return cls.body.body;
+}
+
+/** A member of an object literal or a class body that is a function under a plain name, with its kind. */
+function accessorOf(
+  member: TSESTree.ObjectLiteralElement | TSESTree.ClassElement,
+): { key: string; kind: string; fn: TSESTree.FunctionExpression } | undefined {
+  if (member.type === AST_NODE_TYPES.Property || member.type === AST_NODE_TYPES.MethodDefinition) {
+    if (member.computed || member.key.type !== AST_NODE_TYPES.Identifier || member.value.type !== AST_NODE_TYPES.FunctionExpression) return undefined;
+    if (member.type === AST_NODE_TYPES.MethodDefinition && (member.static || member.decorators.length > 0)) return undefined;
+    return { key: member.key.name, kind: member.kind, fn: member.value };
+  }
+  return undefined;
 }
 
 /** The name a generated getter reads: `x`, or `x` under a `typeof x` guard. */

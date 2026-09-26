@@ -53,9 +53,9 @@ export function half(amount: number) {
 
 export const round = (amount: number) => roundHermetic.call(roundContext, amount);
 
-const roundContext = {
-  get Math(): typeof Math { return Math; },
-};
+const roundContext = new (class {
+  get Math(): typeof Math { return Math; }
+})();
 
 function roundHermetic(this: { Math: typeof Math }, amount: number) {
   "use hermetic";
@@ -72,11 +72,11 @@ function toCentsHermetic(this: { round: typeof round; units: typeof units }, dol
 
 export const discount = (dollars: number, rate = 0.2) => discountHermetic.call(discountContext, dollars, rate);
 
-const discountContext = {
-  get discounts(): typeof discounts { return discounts; },
-  set discounts(value: typeof discounts) { discounts = value; },
-  get toCents(): typeof toCents { return toCents; },
-};
+const discountContext = new (class {
+  get discounts(): typeof discounts { return discounts; }
+  set discounts(value: typeof discounts) { discounts = value; }
+  get toCents(): typeof toCents { return toCents; }
+})();
 
 function discountHermetic(this: { discounts: typeof discounts; toCents: typeof toCents }, dollars: number, rate = 0.2) {
   "use hermetic";
@@ -98,7 +98,7 @@ The wrapper keeps the function's name, type parameters, parameters, defaults, re
 The wrapper passes `this` in one of two forms:
 
 - **Directly**, as in `toCents`, when every lifted value is *settled*: initialized whenever the wrapper can run, and never reassigned. Function declarations and namespace imports are always settled, and so are constants and classes declared above a wrapper that isn't hoisted.
-- **Through a shared context object**, as in `round` and `discount`, otherwise. Globals always go this way, since other code can replace or remove them. The object is created once, right after the wrapper. Its getters read each value when the hermetic function does, and its setters write assignments back. A wrapper that isn't hoisted can't run before its own statement, and the context object's statement comes right after it, so the object always exists when the wrapper runs.
+- **Through a shared context object**, as in `round` and `discount`, otherwise. Globals always go this way, since other code can replace or remove them. The object is created once, right after the wrapper. Its getters read each value when the hermetic function does, and its setters write assignments back. A wrapper that isn't hoisted can't run before its own statement, and the context object's statement comes right after it, so the object always exists when the wrapper runs. The object is an instance of a class, because V8 keeps an object literal with getters in dictionary mode, where each read costs several times as much.
 
 A function declaration is hoisted. It can run before any statement of its module, and in an import cycle, before its imports are initialized. So a declaration is only lifted when its values can be passed directly.
 
@@ -127,7 +127,7 @@ The fix only applies when the rewrite can't change behavior or types. It skips:
 - **Functions called through `this` receive it as their `this`.** The hermetic function calls `this.round(...)` where the original called `round(...)`, so `round` runs with the context object as `this` instead of `undefined`. Functions that ignore `this`, which is nearly all module functions, are unaffected.
 - **A global function called without a receiver is still called without one.** The hermetic function calls `fetch(url)` as `(0, this.fetch)(url)`, so `fetch` still gets `undefined` as its `this`. ECMAScript's own functions ignore their receiver, so `Number(x)` becomes `this.Number(x)`.
 - **Async functions and generators** become plain functions that return the hermetic function's promise or iterator.
-- **Each call costs one more call and some property reads.** In microbenchmarks of Effect's hottest paths (collections, the fiber runtime, Schema decoding), the lifted library ran 18 to 76 percent slower. The cost is per call, so it matters where calls are cheap and frequent. [Unlifting](#unlifting-at-build-time) removes it from builds.
+- **Each call costs one more call and some property reads.** In microbenchmarks of Effect's hottest paths (collections, the fiber runtime, Schema decoding), the lifted library ran 13 to 54 percent slower. The cost is per call, so it matters where calls are cheap and frequent. [Unlifting](#unlifting-at-build-time) removes it from builds.
 - **Formatting and ordering.** The fix emits plain formatting, so run your formatter afterwards. The wrapper refers to its context object and hermetic function, which are declared after it, and `no-use-before-define` reports that unless its `functions` and `variables` options are off.
 
 ### Why a wrapper, not a bound function
@@ -152,9 +152,9 @@ On the corpus, unlifting the lifted code gives back the marked original in every
 
 | Workload | Lifted | Unlifted | Original again |
 | --- | --- | --- | --- |
-| `Effect.gen` with `map` and `flatMap` | +18% | −15% | −4% |
-| `Chunk`, `HashMap`, `Option` | +76% | −6% | −4% |
-| `Schema` decoding | +76% | −8% | −7% |
+| `Effect.gen` with `map` and `flatMap` | +13% | 0% | +1% |
+| `Chunk`, `HashMap`, `Option` | +54% | +1% | 0% |
+| `Schema` decoding | +17% | −2% | −3% |
 
 `npm run corpus -- roundtrip`, `npm run corpus -- effect --unlift` and `npm run corpus -- bench` reproduce these, and the [Effect case study](https://bombadil-labs.github.io/hermetic/case-studies/effect.html) has the full story.
 

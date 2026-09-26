@@ -1,7 +1,7 @@
 {
   "generated": {
-    "date": "2026-09-25T21:53:25.637Z",
-    "commit": "ec662a6",
+    "date": "2026-09-26T01:31:35.287Z",
+    "commit": "002b3fb",
     "dirty": false,
     "node": "v22.22.2"
   },
@@ -109,7 +109,7 @@
           "line": 1194,
           "outcome": "shared",
           "before": "export const tail = <A>(self: Iterable<A>): Option.Option<Array<A>> => {\n  const input = fromIterable(self)\n  return isNonEmptyReadonlyArray(input) ? Option.some(tailNonEmpty(input)) : Option.none()\n}",
-          "after": "export const tail = <A>(self: Iterable<A>): Option.Option<Array<A>> => (tailHermetic<A>).call(tailContext, self)\n\nconst tailContext = {\n  get fromIterable(): typeof fromIterable { return fromIterable; },\n  get isNonEmptyReadonlyArray(): typeof isNonEmptyReadonlyArray { return isNonEmptyReadonlyArray; },\n  get Option(): typeof Option { return Option; },\n  get tailNonEmpty(): typeof tailNonEmpty { return tailNonEmpty; },\n};\n\nfunction tailHermetic<A>(this: { fromIterable: typeof fromIterable; isNonEmptyReadonlyArray: typeof isNonEmptyReadonlyArray; Option: typeof Option; tailNonEmpty: typeof tailNonEmpty }, self: Iterable<A>): Option.Option<Array<A>> {\n  \"use hermetic\";\n  const input = this.fromIterable(self)\n  return this.isNonEmptyReadonlyArray(input) ? this.Option.some(this.tailNonEmpty(input)) : this.Option.none()\n}"
+          "after": "export const tail = <A>(self: Iterable<A>): Option.Option<Array<A>> => (tailHermetic<A>).call(tailContext, self)\n\nconst tailContext = new (class {\n  get fromIterable(): typeof fromIterable { return fromIterable; }\n  get isNonEmptyReadonlyArray(): typeof isNonEmptyReadonlyArray { return isNonEmptyReadonlyArray; }\n  get Option(): typeof Option { return Option; }\n  get tailNonEmpty(): typeof tailNonEmpty { return tailNonEmpty; }\n})();\n\nfunction tailHermetic<A>(this: { fromIterable: typeof fromIterable; isNonEmptyReadonlyArray: typeof isNonEmptyReadonlyArray; Option: typeof Option; tailNonEmpty: typeof tailNonEmpty }, self: Iterable<A>): Option.Option<Array<A>> {\n  \"use hermetic\";\n  const input = this.fromIterable(self)\n  return this.isNonEmptyReadonlyArray(input) ? this.Option.some(this.tailNonEmpty(input)) : this.Option.none()\n}"
         },
         {
           "file": "effect/src/internal/schedule/interval.ts",
@@ -117,7 +117,7 @@
           "line": 94,
           "outcome": "shared",
           "before": "export const after = (startMilliseconds: number): Interval.Interval => {\n  return make(startMilliseconds, Number.POSITIVE_INFINITY)\n}",
-          "after": "export const after = (startMilliseconds: number): Interval.Interval => afterHermetic.call(afterContext, startMilliseconds)\n\nconst afterContext = {\n  get make(): typeof make { return make; },\n  get Number(): typeof Number { return Number; },\n};\n\nfunction afterHermetic(this: { make: typeof make; Number: typeof Number }, startMilliseconds: number): Interval.Interval {\n  \"use hermetic\";\n  return this.make(startMilliseconds, this.Number.POSITIVE_INFINITY)\n}"
+          "after": "export const after = (startMilliseconds: number): Interval.Interval => afterHermetic.call(afterContext, startMilliseconds)\n\nconst afterContext = new (class {\n  get make(): typeof make { return make; }\n  get Number(): typeof Number { return Number; }\n})();\n\nfunction afterHermetic(this: { make: typeof make; Number: typeof Number }, startMilliseconds: number): Interval.Interval {\n  \"use hermetic\";\n  return this.make(startMilliseconds, this.Number.POSITIVE_INFINITY)\n}"
         },
         {
           "file": "effect/src/Arbitrary.ts",
@@ -365,8 +365,8 @@
     "lifted": {
       "source": "lifted",
       "lifted": 2475,
-      "date": "2026-09-25T21:42:02.457Z",
-      "commit": "ec662a6",
+      "date": "2026-09-26T01:15:11.005Z",
+      "commit": "002b3fb",
       "dirty": false,
       "files": 520,
       "tests": 6243,
@@ -377,8 +377,8 @@
     "unlifted": {
       "source": "unlifted",
       "lifted": 2475,
-      "date": "2026-09-25T21:45:58.861Z",
-      "commit": "ec662a6",
+      "date": "2026-09-26T01:20:36.080Z",
+      "commit": "002b3fb",
       "dirty": false,
       "files": 520,
       "tests": 6243,
@@ -387,30 +387,30 @@
       "skipped": 10
     },
     "bench": {
-      "date": "2026-09-25T21:47:24.991Z",
-      "commit": "ec662a6",
+      "date": "2026-09-26T01:22:51.794Z",
+      "commit": "002b3fb",
       "dirty": false,
       "node": "v22.22.2",
       "processes": 4,
       "samples": 7,
       "workloads": {
         "Effect.gen, map, flatMap": {
-          "original": 46.1525529999999,
-          "lifted": 54.24568899999997,
-          "unlifted": 39.107065000000034,
-          "control": 44.44816300000002
+          "original": 104.65745800000013,
+          "lifted": 118.75640999999973,
+          "unlifted": 104.40974000000006,
+          "control": 105.64640300000019
         },
         "Chunk, HashMap, Option": {
-          "original": 29.735090000000127,
-          "lifted": 52.30012799999986,
-          "unlifted": 27.95335299999988,
-          "control": 28.687347000000045
+          "original": 58.825213000000076,
+          "lifted": 90.7503569999999,
+          "unlifted": 59.21223000000009,
+          "control": 58.983168000000205
         },
         "Schema decode": {
-          "original": 26.191669000000047,
-          "lifted": 46.16382199999998,
-          "unlifted": 24.177469999999857,
-          "control": 24.320220999999947
+          "original": 47.11767000000009,
+          "lifted": 55.21625300000005,
+          "unlifted": 46.163771,
+          "control": 45.908214000000044
         }
       }
     }

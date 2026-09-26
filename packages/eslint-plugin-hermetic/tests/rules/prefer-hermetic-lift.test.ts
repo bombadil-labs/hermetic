@@ -8,6 +8,7 @@ import { preferHermetic } from "../../src/rules/prefer-hermetic.ts";
 
 const ruleTester = new RuleTester();
 const lift = [{ lift: true }] as const;
+const liftAssumingImports = [{ lift: true, importsSettled: true }] as const;
 
 ruleTester.run("prefer-hermetic: lift", preferHermetic, {
   valid: [
@@ -53,6 +54,16 @@ const R = 2;`,
     { name: "a function declaration reading a named import", code: `import { clamp } from "./clamp";
 export function f(a: number) { return clamp(a); }`, options: lift },
     { name: "a function declaration reading a global", code: `export function now() { return Date.now(); }`, options: lift },
+    {
+      name: "a function declaration reading a global, when imports are settled",
+      code: `export function now() { return Date.now(); }`,
+      options: liftAssumingImports,
+    },
+    {
+      name: "importsSettled without lift",
+      code: `import { clamp } from "./clamp";\nexport function f(a: number) { return clamp(a); }`,
+      options: [{ importsSettled: true }],
+    },
     {
       name: "a name a class can't have as an accessor",
       code: `export const make = () => constructor;\nconst constructor = 1;`,
@@ -120,6 +131,38 @@ export const where = () => new Error(String(R)).stack;`,
     },
   ],
   invalid: [
+    {
+      name: "when imports are settled, a function declaration that reads one is lifted, and passes it directly",
+      code: [
+        `import { clamp } from "./clamp";`,
+        `export function f(a: number) {`,
+        `  return clamp(a);`,
+        `}`,
+        `export const g = (a: number) => clamp(a) + 1;`,
+      ].join("\n"),
+      output: [
+        `import { clamp } from "./clamp";`,
+        `export function f(a: number) {`,
+        `  return fHermetic.call({ clamp }, a);`,
+        `}`,
+        ``,
+        `function fHermetic(this: { clamp: typeof clamp }, a: number) {`,
+        `  "use hermetic";`,
+        `  return this.clamp(a);`,
+        `}`,
+        `export const g = (a: number) => gHermetic.call({ clamp }, a);`,
+        ``,
+        `function gHermetic(this: { clamp: typeof clamp }, a: number) {`,
+        `  "use hermetic";`,
+        `  return this.clamp(a) + 1;`,
+        `}`,
+      ].join("\n"),
+      options: liftAssumingImports,
+      errors: [
+        { messageId: "liftable", data: { fn: "f", names: "clamp" } },
+        { messageId: "liftable", data: { fn: "g", names: "clamp" } },
+      ],
+    },
     {
       name: "a declaration passes what always exists directly, and keeps its name, signature and export",
       code: [

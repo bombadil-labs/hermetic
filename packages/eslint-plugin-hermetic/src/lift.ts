@@ -94,8 +94,13 @@ export type LiftBlocker =
  * changing behavior, and what moves into the context. Returns undefined when a
  * person should decide; `tryLift` says why.
  */
-export function planLift(fn: FunctionNode, problems: readonly Problem[], env: Environment): LiftPlan | undefined {
-  const result = tryLift(fn, problems, env);
+export function planLift(
+  fn: FunctionNode,
+  problems: readonly Problem[],
+  env: Environment,
+  assumptions: LiftAssumptions = {},
+): LiftPlan | undefined {
+  const result = tryLift(fn, problems, env, assumptions);
   return typeof result === "string" ? undefined : result;
 }
 
@@ -104,8 +109,8 @@ export interface LiftAssumptions {
   /**
    * Imported bindings are initialized before any function that reads them
    * runs, and do not change while it runs. An import cycle breaks the first
-   * and an exported `let` the second, so the lift does not assume it; the
-   * corpus report does, to count what an opt-in would change.
+   * and an exported `let` the second, so the lift assumes it only when
+   * `prefer-hermetic`'s `importsSettled` option says so.
    */
   readonly importsSettled?: boolean;
 }

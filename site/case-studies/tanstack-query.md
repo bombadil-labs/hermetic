@@ -49,7 +49,7 @@ In react-query, hooks written as arrow functions lift with `React` passed in dir
 
 <!-- example @tanstack/react-query/src/useQuery.ts#useQuery -->
 
-{{tanstack.hoistedOnlyImports}} of the {{tanstack.hoistedSkipped}} functions skipped for this reason read nothing that could be uninitialized except imports. Treating imports as always initialized would lift them, with the tradeoff described in the [RxJS case study](rxjs.html#what-treating-imports-as-initialized-would-change). The others also read globals, module constants or classes, so that option wouldn't be enough for them.
+{{tanstack.hoistedOnlyImports}} of the {{tanstack.hoistedSkipped}} functions skipped for this reason read nothing that could be uninitialized except imports. The `importsSettled` option would lift them, with the tradeoff described in the [RxJS case study](rxjs.html#what-treating-imports-as-initialized-would-change). The others also read globals, module constants or classes, so the option isn't enough for them.
 
 ## Classes and components
 

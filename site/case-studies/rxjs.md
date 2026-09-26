@@ -47,7 +47,13 @@ The original `map` would only fail in that case if it actually used an uninitial
 
 {{rxjs.hoistedOnlyImports}} of those {{rxjs.hoistedSkipped}} functions read nothing that could be uninitialized except imports. (Namespace imports, `import * as ns`, are never a problem: the namespace object exists before any module code runs.) If the lift assumed imports are always initialized, it would lift those functions too: {{rxjs.liftedWithImports}} of RxJS's {{rxjs.candidates}} candidates, {{rxjs.liftedWithImportsPct}}, instead of {{rxjs.lifted}}. The rewrite would then behave differently in only two cases: an import cycle that calls the function before its imports are initialized, and an exported `let` that is reassigned while the function runs.
 
-The plugin doesn't offer that option yet. RxJS is the clearest case for adding it.
+The `importsSettled` option makes that assumption:
+
+```sh
+npx eslint --fix --rule '{"hermetic/prefer-hermetic": ["warn", {"lift": true, "importsSettled": true}]}' src/
+```
+
+It is off by default, because the lift can't see those two cases coming: only the people who know the code can say that no import cycle calls a function early, and that no exported `let` changes while a function runs.
 
 ## Everything skipped
 

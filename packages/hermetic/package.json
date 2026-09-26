@@ -27,6 +27,11 @@
       "types": "./dist/inject.d.ts",
       "default": "./dist/inject.js"
     },
+    "./record": {
+      "@bombadil/source": "./src/record.ts",
+      "types": "./dist/record.d.ts",
+      "default": "./dist/record.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

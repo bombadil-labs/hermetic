@@ -6,6 +6,7 @@
 - `confine` runs a hermetic function in a [Hardened JS](https://hardenedjs.org/) compartment whose global object is empty.
 - `intrinsics` picks the deterministic built-ins out of a realm, for bindings to pass in.
 - `inject`, which is optional and has its own entry point, binds a hermetic function to exactly the names it reads.
+- `record` and `replay`, with their own entry point, capture everything a call does with its inputs and play it back as a test.
 
 The ESLint rules, which check functions as you write them and rewrite existing ones to be hermetic, are in [`@bombadil/eslint-plugin-hermetic`](https://www.npmjs.com/package/@bombadil/eslint-plugin-hermetic). The [repository's README](https://github.com/bombadil-labs/hermetic#readme) explains what hermetic functions are for.
 
@@ -165,6 +166,42 @@ Whatever you pass to a confined function is still its to use and change, so hard
 - **The source holds text Hardened JS rejects,** even inside a string or comment: `import(`, `<!--` or `-->`.
 - **The function only works in sloppy mode.** Compartments run strict-mode code.
 
+## record and replay
+
+A hermetic function reads nothing but its inputs, so a call is described completely by what it was given and what it did with it. `record` captures that where the function runs for real, and `replay` turns it into a test that needs no mocks and no environment:
+
+```ts
+import { record, replay, type Recording } from "@bombadil/hermetic/record";
+
+function applyDiscount(this: { rate: number; clamp: (n: number) => number }, total: number) {
+  "use hermetic";
+  return this.clamp(total * (1 - this.rate));
+}
+
+// Where it runs for real, record its calls.
+let saved = "";
+const price = record(applyDiscount, { rate: 0.25, clamp: (n) => Math.min(n, 60) }, (recording) => {
+  saved = JSON.stringify(recording);
+});
+price(100); // 60
+
+// In a test, replay the recording. It needs nothing else.
+replay(applyDiscount, JSON.parse(saved) as Recording); // 60
+```
+
+- **A recording is JSON.** It holds the call's `this` and arguments, every operation the function performed on them and on what it reached through them, in order: reads, writes, calls, constructions and key listings, each with its result. Then it holds how the call ended.
+- **Data crosses as data.** Numbers, strings, arrays, plain objects and the standard errors are copied into the recording, and the function works on them as usual. `undefined`, `NaN`, `-0` and bigints survive the trip through JSON. Anything else, such as a function, a class instance or `this` itself, is referred to by an id, and what the function does with it is recorded.
+- **Callbacks are recorded too.** When the other side calls a function it was given, such as a callback passed to `this.each`, the recording holds that call, and what the callback did during it.
+- **Asynchronous calls replay in order.** For a call that returns a promise, the recording holds how each promise from its inputs settled, and when, and how the call's own promise settled. `replay` settles the promises in the recorded order, calls back what the function gave the other side when the recording says it was called, and returns a promise.
+
+`replay` runs the function with stand-ins that do exactly what the recorded inputs did. At the first thing the function does differently, it throws a `ReplayError`, such as "The function called this.clamp(25), and the recorded call called this.clamp(75) there." Otherwise it returns what the function returns, or throws what it throws. The order counts: a change that reads `this.rate` before `this.clamp` fails a replay, even if it computes the same result.
+
+Both throw a `HermeticError` for a function that isn't hermetic, since a recording would miss what it reads besides its inputs. Some things they don't follow:
+
+- **Identity of data.** Data is copied each time it crosses, so two reads of the same array give the same array when recorded, and two equal copies in a replay.
+- **What happens after the call.** The recording ends with the call, so it doesn't hold what a returned function or generator does later.
+- **Reshaping an input.** Making an input non-extensible, changing its prototype, or defining a non-configurable property on it throws a `TypeError`.
+
 ## checkHermetic
 
 `check` binds acorn to `checkHermetic`, which does the work. `checkHermetic` is itself hermetic: its parser comes in through `this`, every helper is nested inside it, and it reads no globals. Its source is complete on its own, so it can be sent to another runtime and bound there. It passes its own check, which lists its `needs` as `["parse"]`, and runs under `confine`:
@@ -192,6 +229,14 @@ function confine<F extends FunctionLike>(fn: string | F): F;
 function intrinsics(realm: typeof globalThis): Intrinsics;
 // From "@bombadil/hermetic/inject":
 function inject<T, A extends unknown[], R>(fn: (this: T, ...args: A) => R, env: NoInfer<T>): (...args: A) => R;
+// From "@bombadil/hermetic/record":
+function record<T, A extends unknown[], R>(
+  fn: (this: T, ...args: A) => R,
+  env: NoInfer<T>,
+  onRecording: (recording: Recording) => void,
+): (...args: A) => R;
+function replay<T, A extends unknown[], R>(fn: (this: T, ...args: A) => R, recording: Recording): R;
+class ReplayError extends Error {}
 class HermeticError extends Error {
   readonly source: string;
   readonly problems: readonly Problem[];

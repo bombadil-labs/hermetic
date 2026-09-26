@@ -103,7 +103,10 @@ export const applyPricing = applyDiscount.bind(pricing);</pre>
             </div>
             <div class="card">
               <h3>Tests without module mocks</h3>
-              <p>Pass test values as inputs instead of mocking modules. Wrap <code>this</code> in a Proxy to record every use of the dependencies the function was given.</p>
+              <p>
+                Pass test values as inputs instead of mocking modules. Or record a real call: <code>record</code> captures
+                everything the function does with its inputs, and <code>replay</code> plays it back as a test.
+              </p>
             </div>
             <div class="card">
               <h3>Dependencies you can find</h3>

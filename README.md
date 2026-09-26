@@ -26,7 +26,7 @@ Hermetic doesn't mean pure. A hermetic function can change its inputs, or call m
 What you get:
 
 - **Portable code.** The function's source is all of its behavior, so it runs the same in another file, a worker or a sandbox: `new Function("return " + fn.toString())()` behaves exactly like `fn`. This repository's tests check that on the examples, and `confine` runs a function's source in a Hardened JS compartment.
-- **Tests without module mocks.** Pass test values as inputs. Wrap `this` in a Proxy to record every use of the dependencies the function was given.
+- **Tests without module mocks.** Pass test values as inputs. Or record a real call: `record` captures everything a hermetic function does with its inputs, and `replay` plays the recording back as a test.
 - **Dependencies you can find.** To find out which functions can call Stripe, look at the code that passes the Stripe client in.
 - **Self-contained changes.** A function's inputs, the type of `this` and its body are everything a person or an agent needs to read before changing it. The rule checks generated code the same way as handwritten code.
 
@@ -45,7 +45,7 @@ What you get:
 | Package | What it does |
 | --- | --- |
 | [`@bombadil/eslint-plugin-hermetic`](packages/eslint-plugin-hermetic) | ESLint rules. `hermetic/sealed` checks the functions you mark as hermetic, and `hermetic/prefer-hermetic` finds functions that already are, and rewrites others so they can be. |
-| [`@bombadil/hermetic`](packages/hermetic) | The same check at runtime, with no ESLint. `check` reads a function's source and reports what it reads besides its inputs, `confine` runs a hermetic function in a [Hardened JS](https://hardenedjs.org/) compartment, and `intrinsics` picks the deterministic built-ins out of the runtime, to pass in. `inject`, if you want it, binds a function to exactly the names it reads. |
+| [`@bombadil/hermetic`](packages/hermetic) | The same check at runtime, with no ESLint. `check` reads a function's source and reports what it reads besides its inputs, `confine` runs a hermetic function in a [Hardened JS](https://hardenedjs.org/) compartment, and `intrinsics` picks the deterministic built-ins out of the runtime, to pass in. `inject`, if you want it, binds a function to exactly the names it reads, and `record` and `replay` turn a real call into a test. |
 
 The plugin lints in your editor and CI:
 
@@ -94,7 +94,7 @@ The rules are documented in [the plugin's README](packages/eslint-plugin-hermeti
 | M2 | Allowed globals chosen by a bootstrap, run in `node:vm` after the rule lints it | Replaced in 0.3.0: no globals |
 | M3 | Denied members | Replaced in 0.3.0: no globals |
 | M4 | Doctest harness with the `toString` round trip | Next |
-| M5 | Recording Proxy for `this`, replaying a captured call as a test | Next |
+| M5 | Recording Proxy for `this`, replaying a captured call as a test | Done: `record` and `replay` |
 | | `hermetic/prefer-hermetic`: marking and lift fixes, validated on a corpus | Done |
 | | `unlift`: the lift's exact inverse, validated by a round trip on the corpus | Done |
 | | `check`: the same check at runtime, from a function's source, validated against the rule on the corpus | Done |

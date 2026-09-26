@@ -45,7 +45,7 @@ What you get:
 | Package | What it does |
 | --- | --- |
 | [`@bombadil/eslint-plugin-hermetic`](packages/eslint-plugin-hermetic) | ESLint rules. `hermetic/sealed` checks the functions you mark as hermetic, and `hermetic/prefer-hermetic` finds functions that already are, and rewrites others so they can be. |
-| [`@bombadil/hermetic`](packages/hermetic) | The same check at runtime, with no ESLint. `check` reads a function's source and reports what it reads besides its inputs, `confine` runs a hermetic function in a [Hardened JS](https://hardenedjs.org/) compartment, and `intrinsics` picks the deterministic built-ins out of the runtime, to pass in. `inject`, if you want it, binds a function to exactly the names it reads, and `record` and `replay` turn a real call into a test. |
+| [`@bombadil/hermetic`](packages/hermetic) | The same check at runtime, with no ESLint. `check` reads a function's source and reports what it reads besides its inputs, `confine` runs a hermetic function in a [Hardened JS](https://hardenedjs.org/) compartment, and `intrinsics` picks the deterministic built-ins out of the runtime, to pass in. `inject`, if you want it, binds a function to exactly the names it reads. `record` and `replay` turn a real call into a test, and `doctests` runs the examples in a function's JSDoc. |
 
 The plugin lints in your editor and CI:
 
@@ -93,7 +93,7 @@ The rules are documented in [the plugin's README](packages/eslint-plugin-hermeti
 | M1 | Core rule, directive and JSDoc marking | Done |
 | M2 | Allowed globals chosen by a bootstrap, run in `node:vm` after the rule lints it | Replaced in 0.3.0: no globals |
 | M3 | Denied members | Replaced in 0.3.0: no globals |
-| M4 | Doctest harness with the `toString` round trip | Next |
+| M4 | Doctest harness with the `toString` round trip | Done: `doctests` |
 | M5 | Recording Proxy for `this`, replaying a captured call as a test | Done: `record` and `replay` |
 | | `hermetic/prefer-hermetic`: marking and lift fixes, validated on a corpus | Done |
 | | `unlift`: the lift's exact inverse, validated by a round trip on the corpus | Done |

@@ -7,6 +7,7 @@
 - `intrinsics` picks the deterministic built-ins out of a realm, for bindings to pass in.
 - `inject`, which is optional and has its own entry point, binds a hermetic function to exactly the names it reads.
 - `record` and `replay`, with their own entry point, capture everything a call does with its inputs and play it back as a test.
+- `doctests`, with its own entry point, runs the examples in a hermetic function's JSDoc, against the function and against a copy made from its source.
 
 The ESLint rules, which check functions as you write them and rewrite existing ones to be hermetic, are in [`@bombadil/eslint-plugin-hermetic`](https://www.npmjs.com/package/@bombadil/eslint-plugin-hermetic). The [repository's README](https://github.com/bombadil-labs/hermetic#readme) explains what hermetic functions are for.
 
@@ -202,6 +203,43 @@ Both throw a `HermeticError` for a function that isn't hermetic, since a recordi
 - **What happens after the call.** The recording ends with the call, so it doesn't hold what a returned function or generator does later.
 - **Reshaping an input.** Making an input non-extensible, changing its prototype, or defining a non-configurable property on it throws a `TypeError`.
 
+## doctests
+
+A hermetic function's source is all of its behavior, so `new Function("return " + fn.toString())()` makes a copy that behaves exactly like it, wherever it runs. `doctests` turns the examples in a module's JSDoc into tests that check both:
+
+```ts
+/**
+ * Rounds to whole cents.
+ * @example
+ * toCents.call({ Math }, 1.005) // => 1
+ * toCents.call({ Math }, -1.234) // => -1.23
+ */
+export function toCents(this: { Math: Pick<Math, "round"> }, n: number): number {
+  "use hermetic";
+  return this.Math.round(n * 100) / 100;
+}
+```
+
+```ts
+import fs from "node:fs";
+import { doctests } from "@bombadil/hermetic/doctest";
+import { describe, it } from "vitest";
+import * as money from "../src/money.ts";
+
+describe("money's examples", () => {
+  const source = fs.readFileSync(new URL("../src/money.ts", import.meta.url), "utf8");
+  for (const test of doctests(money, source)) it(test.name, test.run);
+});
+```
+
+- **Which functions.** Each exported function marked hermetic, by its directive or an `@hermetic` tag, gets a test for each `@example`, named after its `<caption>` if it has one. A function marked hermetic that `check` finds isn't fails its tests with a `HermeticError`.
+- **Two runs.** Each example runs with the function the module exports, then with a copy made from its source alone. The copy can't see anything the source doesn't hold, such as a helper the compiler added outside the function.
+- **What an example checks.** An example is JavaScript. A line that ends in `// => value` checks that the code before the comment gives `value`, compared by structure; a line that ends in `// throws`, `// throws TypeError` or `// throws TypeError: message` checks that it throws such an error. Other lines run as they are, and any line may use `await`. A checked expression has to fit on its line.
+- **What an example can use.** The function, by its name, and any global. To pass other values, give `doctests` a `scope`: `doctests(money, source, { scope: { env } })`.
+- **Why the source text.** A function's JSDoc isn't part of its `toString()`, so `doctests` finds the examples in the module's source, and takes the functions from the module itself.
+
+`test.run` returns a promise, and rejects with a `DoctestError` that names the function, which of the two runs, and the example's line.
+
 ## checkHermetic
 
 `check` binds acorn to `checkHermetic`, which does the work. `checkHermetic` is itself hermetic: its parser comes in through `this`, every helper is nested inside it, and it reads no globals. Its source is complete on its own, so it can be sent to another runtime and bound there. It passes its own check, which lists its `needs` as `["parse"]`, and runs under `confine`:
@@ -237,6 +275,13 @@ function record<T, A extends unknown[], R>(
 ): (...args: A) => R;
 function replay<T, A extends unknown[], R>(fn: (this: T, ...args: A) => R, recording: Recording): R;
 class ReplayError extends Error {}
+// From "@bombadil/hermetic/doctest":
+function doctests(module: Record<string, unknown>, source: string, options?: { scope?: Record<string, unknown> }): Doctest[];
+interface Doctest {
+  name: string;
+  run: () => Promise<void>;
+}
+class DoctestError extends Error {}
 class HermeticError extends Error {
   readonly source: string;
   readonly problems: readonly Problem[];

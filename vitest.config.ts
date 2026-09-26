@@ -7,6 +7,7 @@ export default defineConfig({
     alias: [
       { find: /^@bombadil\/hermetic$/, replacement: fileURLToPath(new URL("./packages/hermetic/src/index.ts", import.meta.url)) },
       { find: /^@bombadil\/hermetic\/inject$/, replacement: fileURLToPath(new URL("./packages/hermetic/src/inject.ts", import.meta.url)) },
+      { find: /^@bombadil\/hermetic\/doctest$/, replacement: fileURLToPath(new URL("./packages/hermetic/src/doctest.ts", import.meta.url)) },
       { find: /^@bombadil\/hermetic\/record$/, replacement: fileURLToPath(new URL("./packages/hermetic/src/record.ts", import.meta.url)) },
     ],
   },

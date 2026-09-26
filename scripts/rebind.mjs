@@ -9,6 +9,13 @@
 // hermetic and the context is an object literal or the shared context the
 // lift declares right after the binding. A function declaration keeps its
 // wrapper, since a `const` can't run before its own line.
+//
+// The result, at cf984a9: 2,450 of the 2,498 lifted functions were rebound.
+// Effect's 6,233 tests pass on the rebound source, but it has 904 new type
+// errors, and the benchmarks gained little: the lifted copy ran +6%, +42% and
+// +47% against the original, the bound one -8%, +24% and +51%, and a second
+// copy of the original -4%, -9% and -5%. So the lift keeps its wrapper; see
+// "Why a wrapper, not a bound function" in prefer-hermetic's docs.
 
 import * as tsParser from "@typescript-eslint/parser";
 

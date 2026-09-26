@@ -130,6 +130,18 @@ The fix only applies when the rewrite can't change behavior or types. It skips:
 - **Each call costs one more call and some property reads.** In microbenchmarks of Effect's hottest paths (collections, the fiber runtime, Schema decoding), the lifted library ran 18 to 76 percent slower. The cost is per call, so it matters where calls are cheap and frequent. [Unlifting](#unlifting-at-build-time) removes it from builds.
 - **Formatting and ordering.** The fix emits plain formatting, so run your formatter afterwards. The wrapper refers to its context object and hermetic function, which are declared after it, and `no-use-before-define` reports that unless its `functions` and `variables` options are off.
 
+### Why a wrapper, not a bound function
+
+Binding the hermetic function to its context, as `fn.bind({ ... })`, would drop the wrapper's extra call, and needs no restated signature. `npm run corpus -- bind` tries it on the corpus: it rebinds 2,450 of the 2,498 lifted functions. Function declarations keep their wrapper, since a `const` can't run before its own line. Effect's 6,233 tests still pass, but binding recovers little of the cost, and the types don't survive:
+
+| Workload | Lifted | Bound | Original again |
+| --- | --- | --- | --- |
+| `Effect.gen` with `map` and `flatMap` | +6% | −8% | −4% |
+| `Chunk`, `HashMap`, `Option` | +42% | +24% | −9% |
+| `Schema` decoding | +47% | +51% | −5% |
+
+The bound corpus has 904 new type errors: generics that collapse to `unknown`, types inferred in a circle between bindings and the functions they bind, and type predicates and overloads, which TypeScript can't carry through a bound function. So the lift writes a wrapper that restates the signature, and [unlifting](#unlifting-at-build-time) removes the cost instead.
+
 ### Unlifting at build time
 
 The lift has an exact inverse. `unlift` turns each wrapper back into the original function: the hermetic function's parameters and body return to the wrapper, each `this.name` reads `name` again, and the hermetic function and its context object are removed. The result carries no directive, since it is no longer hermetic. The source can stay hermetic, checked and testable, while a build runs the original code, without the costs above.

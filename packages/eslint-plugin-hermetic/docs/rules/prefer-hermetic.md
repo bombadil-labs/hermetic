@@ -97,10 +97,10 @@ The wrapper keeps the function's name, type parameters, parameters, defaults, re
 
 The wrapper passes `this` in one of two forms:
 
-- **Directly**, as in `toCents`, when every lifted value is *settled*: initialized whenever the wrapper can run, and never reassigned. Function declarations and namespace imports are always settled, and so are constants and classes declared above a wrapper that isn't hoisted.
+- **Directly**, as in `toCents`, when every lifted value is *settled*: initialized whenever the wrapper can run, and never reassigned. Function declarations and namespace imports are always settled, and so are constants and classes declared above a wrapper that isn't hoisted. With the [`importsSettled`](#options) option, named imports count as settled too.
 - **Through a shared context object**, as in `round` and `discount`, otherwise. Globals always go this way, since other code can replace or remove them. The object is created once, right after the wrapper. Its getters read each value when the hermetic function does, and its setters write assignments back. A wrapper that isn't hoisted can't run before its own statement, and the context object's statement comes right after it, so the object always exists when the wrapper runs. The object is an instance of a class, because V8 keeps an object literal with getters in dictionary mode, where each read costs several times as much.
 
-A function declaration is hoisted. It can run before any statement of its module, and in an import cycle, before its imports are initialized. So a declaration is only lifted when its values can be passed directly.
+A function declaration is hoisted. It can run before any statement of its module, and in an import cycle, before its imports are initialized. So a declaration is only lifted when its values can be passed directly, which for a declaration that reads named imports takes `importsSettled`.
 
 ### What the lift skips
 
@@ -110,7 +110,7 @@ The fix only applies when the rewrite can't change behavior or types. It skips:
 - Functions that use a lifted name inside a nested `function` or class, where `this` means something else.
 - Writes to constants, imports and globals.
 - A direct call to `eval`, which sees the caller's scope. Called through `this`, it wouldn't.
-- Function declarations that read anything unsettled: named imports, module constants, globals or mutable state, like `report` above.
+- Function declarations that read anything unsettled: named imports unless `importsSettled` is on, module constants, globals or mutable state, like `report` above.
 - Named function expressions, declarations with several declarators, and variables with a type annotation, such as `const f: Handler = ...`, whose function takes its type from the annotation.
 - Functions inside other functions, blocks or classes.
 - `this` parameters, `asserts` return types, and `@ts-expect-error`, `@ts-ignore` or `@ts-nocheck` comments, whose target lines would move.
@@ -189,11 +189,13 @@ The file name is the source's name in the map, and decides how the module is par
 ```ts
 type Options = {
   lift?: boolean; // default false
+  importsSettled?: boolean; // default false
   types?: "allow" | "structural-only"; // default "allow"
 };
 ```
 
 - **`lift`**: also rewrite functions whose only hidden inputs are module-level values and globals, as described above.
+- **`importsSettled`**: with `lift`, treat named imports as settled: initialized before any function that reads them runs, and unchanged while it runs. Wrappers then pass imports directly, and function declarations that read imports, such as RxJS's operators, can be lifted. Turn it on only if no import cycle can call a function before its imports are initialized, and no exported `let` is reassigned while a function that reads it runs; in those two cases the lifted function reads a value the original wouldn't have. The [RxJS case study](https://bombadil-labs.github.io/hermetic/case-studies/rxjs.html#what-treating-imports-as-initialized-would-change) counts what it changes.
 - **`types`**: the same as for [`hermetic/sealed`](sealed.md#options), so that "already hermetic" means what `sealed` will enforce. Both rules also read it from `settings.hermetic`, which is the simplest way to keep them in step.
 
 ## Making a codebase hermetic

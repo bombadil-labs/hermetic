@@ -12,6 +12,14 @@ export interface PreferHermeticOptions extends HermeticSettings {
    * keeping its name, signature and export. Off by default.
    */
   lift?: boolean;
+  /**
+   * With `lift`, treat named imports as settled: initialized before any
+   * function that reads them runs, and unchanged while it runs. Wrappers then
+   * pass imports directly, and function declarations that read imports can be
+   * lifted. An import cycle can break the first, and an exported `let` that is
+   * reassigned the second. Off by default.
+   */
+  importsSettled?: boolean;
 }
 
 type MessageIds = "alreadyHermetic" | "liftable";
@@ -30,6 +38,10 @@ export const preferHermetic = createRule<[PreferHermeticOptions], MessageIds>({
         properties: {
           ...SETTINGS_SCHEMA,
           lift: { type: "boolean", description: "Rewrite functions whose only hidden inputs are module-level values or globals, passing them in through 'this'." },
+          importsSettled: {
+            type: "boolean",
+            description: "With lift, treat named imports as initialized before any function that reads them runs, and unchanged while it runs.",
+          },
         },
         additionalProperties: false,
       },
@@ -59,7 +71,7 @@ export const preferHermetic = createRule<[PreferHermeticOptions], MessageIds>({
           return;
         }
         if (!options.lift || isBinding(node, sourceCode)) return;
-        const plan = planLift(node, problems, env);
+        const plan = planLift(node, problems, env, { importsSettled: options.importsSettled === true });
         if (!plan) return;
         const names = [...plan.lifted.keys()];
         context.report({

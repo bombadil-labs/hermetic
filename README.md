@@ -38,7 +38,7 @@ What you get:
 - **Lift**: the `lift` fix of `hermetic/prefer-hermetic`. It moves a function's body into a new hermetic function that receives the function's hidden inputs through `this`, and turns the original function into a wrapper.
 - **Wrapper**: the original function after a lift. It keeps its name, signature and export, and calls the hermetic function with the values it needs.
 - **Settled**: a module-level name that is initialized before a wrapper can run, and never reassigned. A wrapper passes settled values directly, and everything else through a shared context object.
-- **Unlift**: the exact inverse of the lift. It turns each wrapper back into the original function.
+- **Unlift**: the exact inverse of the lift. It turns each wrapper back into the original function. `unliftPlugin` does it in production builds.
 
 ## Two packages
 
@@ -101,7 +101,7 @@ The rules are documented in [the plugin's README](packages/eslint-plugin-hermeti
 | | `confine`: running a hermetic function in a Hardened JS compartment | Done |
 | | No globals: built-ins come in through `this`, and `intrinsics` picks them out of a runtime | Done |
 | | Hermetic methods | Later |
-| | Bundler plugin that unlifts production builds | Next |
+| | `unliftPlugin`: unlifts Vite builds, with source maps into the lifted source | Done |
 
 ## Development
 

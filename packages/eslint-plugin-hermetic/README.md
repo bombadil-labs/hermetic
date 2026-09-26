@@ -175,7 +175,19 @@ npx eslint --fix --rule '{"hermetic/prefer-hermetic": ["warn", {"lift": true}]}'
 
 The fix only rewrites a function when the rewrite can't change its behavior or types, and leaves every other function as it was. On Effect, RxJS and TanStack Query, it marked 15.0% of 3,703 candidate functions and lifted 67.5%; the fixed code type-checks with no new errors, and Effect's own 6,233 tests pass on its lifted source. The [case studies](https://bombadil-labs.github.io/hermetic/) go through each library: what was marked, lifted and skipped, and why. The [rule's documentation](https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/prefer-hermetic.md) lists what it skips, what changes (a stack frame, `toString`, a per-call cost), and how it decides.
 
-The lift has an exact inverse, `unlift`, which turns each wrapper back into the original function, so the source can stay hermetic while a build runs the original code. On the corpus, unlifting the lifted code gives back the original program in every file, and Effect's benchmarks go from 18–76% slower when lifted to within noise of the original when unlifted. `unlift` isn't part of the published package yet; a bundler plugin that runs it on production builds is next. See [unlifting at build time](https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/prefer-hermetic.md#unlifting-at-build-time).
+The lift has an exact inverse, `unlift`, which turns each wrapper back into the original function, so the source can stay hermetic while a build runs the original code. On the corpus, unlifting the lifted code gives back the original program in every file, and Effect's benchmarks go from 18–76% slower when lifted to within noise of the original when unlifted. `unliftPlugin` runs it in Vite builds, with a source map that points into the lifted source:
+
+```ts
+// vite.config.ts
+import { defineConfig } from "vite";
+import { unliftPlugin } from "@bombadil/eslint-plugin-hermetic/unlift";
+
+export default defineConfig({
+  plugins: [unliftPlugin()],
+});
+```
+
+[Unlifting at build time](https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/prefer-hermetic.md#unlifting-at-build-time) covers what it does and doesn't turn back, and calling `unlift` from another build tool.
 
 ## What hermetic functions don't give you
 

@@ -1,6 +1,7 @@
 import * as tsParser from "@typescript-eslint/parser";
 import { AST_NODE_TYPES, ASTUtils, TSESLint, type TSESTree } from "@typescript-eslint/utils";
-import { applyEdits, childNodes, type Edit, looseComments, parameterSpan, renderComments } from "./ast.ts";
+import { childNodes, type Edit, looseComments, parameterSpan, renderComments } from "./ast.ts";
+import { compose, Mapped, mappedAt, type MappedEdit, type SourceMap, sourceMap } from "./mapped.ts";
 import { type FunctionNode, isFunctionNode } from "./marking.ts";
 
 type SourceCode = TSESLint.SourceCode;
@@ -13,6 +14,13 @@ export interface UnliftResult {
   readonly unlifted: readonly string[];
   /** Bindings that forward to a core but were left alone, and why. */
   readonly skipped: readonly { readonly name: string; readonly line: number; readonly reason: string }[];
+  /** With `sourceMap`, a source map from `code` back to the module it was given. */
+  readonly map?: SourceMap;
+}
+
+export interface UnliftOptions {
+  /** Also return a source map from the result back to the module. */
+  readonly sourceMap?: boolean;
 }
 
 /**
@@ -27,9 +35,9 @@ export interface UnliftResult {
  * is shadowed where it is read. Everything else is left as it is and listed in
  * `skipped`. The result is no longer hermetic, so it carries no directive.
  */
-export function unlift(code: string, filename = "module.ts"): UnliftResult {
+export function unlift(code: string, filename = "module.ts", options: UnliftOptions = {}): UnliftResult {
   const sourceCode = parse(code, filename);
-  const edits: Edit[] = [];
+  const edits: MappedEdit[] = [];
   const unlifted: string[] = [];
   const skipped: { name: string; line: number; reason: string }[] = [];
   for (const statement of sourceCode.ast.body) {
@@ -50,7 +58,8 @@ export function unlift(code: string, filename = "module.ts"): UnliftResult {
   for (let i = 1; i < sorted.length; i++) {
     if ((sorted[i]?.range[0] ?? 0) < (sorted[i - 1]?.range[1] ?? 0)) throw new Error("unlift produced overlapping edits");
   }
-  return { code: applyEdits(code, [0, code.length], sorted), unlifted, skipped };
+  const result = compose(code, [0, code.length], sorted);
+  return { code: result.text, unlifted, skipped, ...(options.sourceMap && { map: sourceMap(result, code, filename) }) };
 }
 
 function parse(code: string, filename: string): SourceCode {
@@ -136,7 +145,7 @@ function planUnlift(
   call: TSESTree.CallExpression,
   callee: TSESTree.Identifier,
   sourceCode: SourceCode,
-): Edit[] | string | undefined {
+): MappedEdit[] | string | undefined {
   const coreVariable = ASTUtils.findVariable(sourceCode.getScope(callee), callee);
   const core = coreVariable?.defs.length === 1 ? coreVariable.defs[0]?.node : undefined;
   if (core?.type !== AST_NODE_TYPES.FunctionDeclaration) return undefined;
@@ -175,7 +184,7 @@ function planUnlift(
   }
 
   const text = sourceCode.text;
-  const raw = (node: TSESTree.Node | undefined | null): string => (node ? text.slice(node.range[0], node.range[1]) : "");
+  const raw = (node: TSESTree.Node | undefined | null): Mapped => (node ? Mapped.copy(text, node.range) : Mapped.empty);
   // A named parameter reads as the binding still spells it, without annotations the lift added to the core.
   const restored = binding.params.flatMap((param, index) => {
     const coreParam = coreParams[index];
@@ -190,20 +199,23 @@ function planUnlift(
     return named && sameShape && coreParam ? [{ range: coreParam.range, text: raw(param) }] : [];
   });
   const within = (edit: Edit) => restored.some(({ range }) => edit.range[0] >= range[0] && edit.range[1] <= range[1]);
-  const params = applyEdits(text, parameterSpan(core, sourceCode), [...edits.filter((edit) => !within(edit)), ...restored]);
-  const signature = `${raw(core.typeParameters)}(${params})${raw(core.returnType)}`;
-  const block = applyEdits(text, core.body.range, edits);
+  const params = compose(text, parameterSpan(core, sourceCode), [...edits.filter((edit) => !within(edit)), ...restored]);
+  // New text in the function stands for the start of the binding it replaces.
+  const at = mappedAt(binding.range[0]);
+  const signature = at`${raw(core.typeParameters)}(${params})${raw(core.returnType)}`;
+  const block = compose(text, core.body.range, edits);
   // Comments the lift carried between the signature and the body. An arrow takes them after `=>`,
   // where a line break is allowed.
   const copied: (readonly [number, number])[] = [parameterSpan(core, sourceCode), core.body.range];
   for (const part of [core.typeParameters, core.returnType]) if (part) copied.push(part.range);
-  const notes = renderComments(looseComments(core, copied, sourceCode), sourceCode, indentOf(sourceCode, core));
-  let replacement: string;
+  const loose = looseComments(core, copied, sourceCode);
+  const notes = Mapped.place(renderComments(loose, sourceCode, indentOf(sourceCode, core)), loose[0]?.range[0] ?? core.range[0]);
+  let replacement: Mapped;
   if (binding.type === AST_NODE_TYPES.ArrowFunctionExpression) {
-    replacement = `${core.async ? "async " : ""}${signature} => ${notes}${conciseBody(core, sourceCode, edits) ?? block}`;
+    replacement = at`${core.async ? "async " : ""}${signature} => ${notes}${conciseBody(core, sourceCode, edits) ?? block}`;
   } else {
     const name = binding.type === AST_NODE_TYPES.FunctionDeclaration ? ` ${binding.id?.name ?? ""}` : " ";
-    replacement = `${core.async ? "async " : ""}function${core.generator ? "*" : ""}${name}${signature} ${notes}${block}`;
+    replacement = at`${core.async ? "async " : ""}function${core.generator ? "*" : ""}${name}${signature} ${notes}${block}`;
   }
 
   const removals = [context.statement, core].flatMap((statement) => {
@@ -511,7 +523,7 @@ function matchParameters(
   if (binding.params.length !== coreParams.length || forwarded.length !== binding.params.length) return mismatch;
   const text = sourceCode.text;
   const sameDefault = (bindingDefault: TSESTree.Expression, coreDefault: TSESTree.Expression): boolean =>
-    text.slice(bindingDefault.range[0], bindingDefault.range[1]) === applyEdits(text, coreDefault.range, edits);
+    text.slice(bindingDefault.range[0], bindingDefault.range[1]) === compose(text, coreDefault.range, edits).text;
   for (const [index, param] of binding.params.entries()) {
     const core = coreParams[index];
     const argument = forwarded[index];
@@ -553,7 +565,7 @@ function matchParameters(
  * a return: the lift's form for an expression-bodied arrow. Comments outside
  * the returned expression keep the block.
  */
-function conciseBody(core: TSESTree.FunctionDeclaration, sourceCode: SourceCode, edits: readonly Edit[]): string | undefined {
+function conciseBody(core: TSESTree.FunctionDeclaration, sourceCode: SourceCode, edits: readonly Edit[]): Mapped | undefined {
   const [, returned, ...rest] = core.body.body;
   if (rest.length > 0 || returned?.type !== AST_NODE_TYPES.ReturnStatement || !returned.argument) return undefined;
   const keyword = sourceCode.getFirstToken(returned);
@@ -564,14 +576,14 @@ function conciseBody(core: TSESTree.FunctionDeclaration, sourceCode: SourceCode,
     .getCommentsInside(core.body)
     .some((comment) => comment.range[0] < keyword.range[1] || comment.range[1] > end);
   if (outside) return undefined;
-  const expression = applyEdits(sourceCode.text, [keyword.range[1], end], edits).trim();
+  const expression = compose(sourceCode.text, [keyword.range[1], end], edits).trim();
   // An object literal, or a comma sequence, must be parenthesized to stay a concise body.
   const bare = returned.argument.type !== AST_NODE_TYPES.SequenceExpression && sourceCode.getFirstToken(returned.argument)?.value !== "{";
   // The lift's own parentheses, which keep a line comment from ending `return`.
-  const guarded = /^\((\/[/*][\s\S]*)\n\)$/.exec(expression)?.[1];
-  if (guarded && bare) return guarded;
+  const guarded = /^\((\/[/*][\s\S]*)\n\)$/.test(expression.text);
+  if (guarded && bare) return expression.slice(1, expression.text.length - 2);
   const wrapped = sourceCode.getTokenBefore(returned.argument)?.value === "(";
-  return wrapped || bare ? expression : `(${expression})`;
+  return wrapped || bare ? expression : mappedAt(returned.argument.range[0])`(${expression})`;
 }
 
 function indentOf(sourceCode: SourceCode, node: TSESTree.Node): string {

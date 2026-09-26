@@ -198,9 +198,14 @@ area.call(harden({ width: 2, height: 3 }));</pre>
           <p class="prose">
             In the table, the unlifted source performs like the second copy of the original, so the remaining difference is
             noise. Unlifting the lifted code gives back the original program in every file, and Effect's
-            {{effect.suite.unlifted.passed}} tests pass on the unlifted source too. <code>unlift</code> isn't part of the
-            published package yet; a bundler plugin that runs it on production builds is next.
+            {{effect.suite.unlifted.passed}} tests pass on the unlifted source too. <code>unliftPlugin</code> runs it in Vite
+            builds, before the other transforms, with a source map into the lifted source.
           </p>
+          <pre data-lang="ts">// vite.config.ts
+import { defineConfig } from "vite";
+import { unliftPlugin } from "@bombadil/eslint-plugin-hermetic/unlift";
+
+export default defineConfig({ plugins: [unliftPlugin()] });</pre>
         </div>
       </section>
 

@@ -20,6 +20,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./unlift": {
+      "types": "./dist/build.d.ts",
+      "default": "./dist/build.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

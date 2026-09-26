@@ -101,7 +101,7 @@ A lifted function makes one extra call and a few property reads each time it run
 
 <!-- bench -->
 
-`unlift` removes that cost. It turns each wrapper back into the original function, so the source can stay hermetic while the build runs the original code. In the table, the unlifted source performs like the second copy of the original, which means the remaining difference is noise. `unlift` isn't part of the published package yet; a bundler plugin that runs it on production builds is next.
+`unlift` removes that cost. It turns each wrapper back into the original function, so the source can stay hermetic while the build runs the original code. In the table, the unlifted source performs like the second copy of the original, which means the remaining difference is noise. `unliftPlugin` runs it in Vite builds, so a production build gets the original code while the source stays hermetic.
 
 ## Reproduce it
 

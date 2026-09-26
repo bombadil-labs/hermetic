@@ -27,6 +27,11 @@
       "types": "./dist/inject.d.ts",
       "default": "./dist/inject.js"
     },
+    "./doctest": {
+      "@bombadil/source": "./src/doctest.ts",
+      "types": "./dist/doctest.d.ts",
+      "default": "./dist/doctest.js"
+    },
     "./record": {
       "@bombadil/source": "./src/record.ts",
       "types": "./dist/record.d.ts",

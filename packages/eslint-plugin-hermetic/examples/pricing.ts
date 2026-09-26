@@ -15,18 +15,36 @@ export interface PricingCtx {
   readonly clamp: (n: number) => number;
 }
 
+/**
+ * Takes the discount off an invoice, and clamps the result.
+ * @example
+ * const pricing = { rate: 0.1, clamp: (n) => Math.round(n) };
+ * applyDiscount.call(pricing, { id: "inv-1", total: 100 }) // => { id: "inv-1", total: 90 }
+ * applyDiscount.call(pricing, { id: "inv-2", total: 55.5 }) // => { id: "inv-2", total: 50 }
+ */
 export function applyDiscount(this: PricingCtx, invoice: Invoice): Invoice {
   "use hermetic";
   return { ...invoice, total: this.clamp(invoice.total * (1 - this.rate)) };
 }
 
-/** Rounds to whole cents. `Math` comes in through `this`, like anything else. */
+/**
+ * Rounds to whole cents. `Math` comes in through `this`, like anything else.
+ * @example
+ * clampToCents.call({ Math }, 19.999) // => 20
+ * clampToCents.call({ Math }, -2.345) // => -2.35
+ */
 export function clampToCents(this: Pick<Intrinsics, "Math">, n: number): number {
   "use hermetic";
   return this.Math.round(n * 100) / 100;
 }
 
-/** Totals invoices. Hermeticity is not transitive, so pricing arrives through `this`. */
+/**
+ * Totals invoices. Hermeticity is not transitive, so pricing arrives through `this`.
+ * @example
+ * const price = (invoice) => ({ ...invoice, total: invoice.total / 2 });
+ * checkout.call({ price }, [{ id: "a", total: 10 }, { id: "b", total: 30 }]) // => 20
+ * checkout.call({ price }, []) // => 0
+ */
 export function checkout(this: { price: (invoice: Invoice) => Invoice }, invoices: readonly Invoice[]): number {
   "use hermetic";
   return invoices.map((invoice) => this.price(invoice).total).reduce((sum, total) => sum + total, 0);

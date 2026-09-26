@@ -156,7 +156,33 @@ On the corpus, unlifting the lifted code gives back the marked original in every
 | `Chunk`, `HashMap`, `Option` | +76% | −6% | −4% |
 | `Schema` decoding | +76% | −8% | −7% |
 
-`npm run corpus -- roundtrip`, `npm run corpus -- effect --unlift` and `npm run corpus -- bench` reproduce these, and the [Effect case study](https://bombadil-labs.github.io/hermetic/case-studies/effect.html) has the full story. `unlift` lives in [`src/unlift.ts`](../../src/unlift.ts) and is not exported yet: a bundler plugin that applies it to production builds comes next.
+`npm run corpus -- roundtrip`, `npm run corpus -- effect --unlift` and `npm run corpus -- bench` reproduce these, and the [Effect case study](https://bombadil-labs.github.io/hermetic/case-studies/effect.html) has the full story.
+
+In a Vite build, `unliftPlugin` unlifts each module as the build reads it:
+
+```ts
+// vite.config.ts
+import { defineConfig } from "vite";
+import { unliftPlugin } from "@bombadil/eslint-plugin-hermetic/unlift";
+
+export default defineConfig({
+  plugins: [unliftPlugin()],
+});
+```
+
+It runs before Vite's other transforms, on the source as written, and only in builds, so the dev server and tests run the lifted source. It returns a source map, so an error in an unlifted function points to its line in the lifted source. A wrapper it can't turn back stays lifted, and the build prints a warning that says why. By default it unlifts JavaScript and TypeScript modules outside `node_modules`; its `include` and `exclude` options take regular expressions that match module ids. The plugin uses only the part of Vite's plugin interface that Rolldown and Rollup share, so it can go in their `plugins` too.
+
+This repository's tests build a small library for production twice: once from its source, and once from its lifted source with the plugin. The two bundles are identical, byte for byte.
+
+For another build tool, call `unlift` on each module's source:
+
+```ts
+import { unlift } from "@bombadil/eslint-plugin-hermetic/unlift";
+
+const { code, map, unlifted, skipped } = unlift(source, "src/pricing.ts", { sourceMap: true });
+```
+
+The file name is the source's name in the map, and decides how the module is parsed: as TypeScript, with JSX unless the name ends in `.ts`, `.mts` or `.cts`. `unlifted` lists the wrappers turned back, and `skipped` the ones left lifted, each with a reason.
 
 ## Options
 

@@ -2,6 +2,13 @@
 // back into the object literals of getters the lift wrote before, to measure
 // what writing them as class instances changed. `npm run corpus -- bench
 // --literal` times both, next to the original.
+//
+// The result, at d1d81d1, on Effect's 1,274 shared contexts: against the
+// original, the lifted copy with class instances ran +23%, +55% and +20%, the
+// one with object literals +20%, +63% and +76%, and a second copy of the
+// original -1%, -2% and +1%. V8 keeps an object literal with getters in
+// dictionary mode, and a class instance in fast mode, where it can inline the
+// getters. So the lift writes class instances.
 
 import * as tsParser from "@typescript-eslint/parser";
 

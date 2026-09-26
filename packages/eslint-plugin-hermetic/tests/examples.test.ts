@@ -1,6 +1,9 @@
+import fs from "node:fs";
+import { doctests } from "@bombadil/hermetic/doctest";
 import * as tsParser from "@typescript-eslint/parser";
 import { ESLint, type Linter } from "eslint";
 import { describe, expect, it } from "vitest";
+import * as pricing from "../examples/pricing.ts";
 import { applyDiscount, bindPricing, checkout, clampToCents, type PricingCtx } from "../examples/pricing.ts";
 import plugin from "../src/index.ts";
 import { repoRoot } from "./helpers.ts";
@@ -30,6 +33,17 @@ describe("the pricing example", () => {
   it("keeps the directive in the compiled source, where runtime tools can see it", () => {
     expect(applyDiscount.toString()).toContain('"use hermetic"');
   });
+});
+
+describe("the pricing example's doctests", () => {
+  const source = fs.readFileSync(new URL("../examples/pricing.ts", import.meta.url), "utf8");
+  const tests = doctests(pricing, source);
+
+  it("has an example for each hermetic function", () => {
+    expect(tests.map((test) => test.name)).toEqual(["applyDiscount: example", "clampToCents: example", "checkout: example"]);
+  });
+
+  for (const test of tests) it(test.name, test.run);
 });
 
 describe("the examples", () => {

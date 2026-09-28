@@ -7,7 +7,7 @@ type ErrorSpec = { messageId: MessageIds; data?: Record<string, string>; line?: 
 
 const free = (name: string, fn = "f"): ErrorSpec => ({ messageId: "freeVariable", data: { name, fn } });
 const escape = (messageId: MessageIds, fn = "f"): ErrorSpec => ({ messageId, data: { fn } });
-const method = (fn: string): ErrorSpec => ({ messageId: "method", data: { fn } });
+const privateName = (name: string, fn: string): ErrorSpec => ({ messageId: "privateName", data: { name, fn } });
 
 ruleTester.run("spec: valid cases", sealed, {
   valid: [
@@ -60,7 +60,7 @@ ruleTester.run("spec: valid cases", sealed, {
     {
       name: "a method",
       code: `class A extends B { method() { "use hermetic"; return super.method(); } }`,
-      errors: [method("method")],
+      errors: [escape("superReference", "method")],
     },
     {
       name: "import.meta",
@@ -129,7 +129,7 @@ ruleTester.run("marking", sealed, {
     {
       name: "object method",
       code: `const R = 1; const o = { m() { "use hermetic"; return R; } };`,
-      errors: [method("m")],
+      errors: [free("R", "m")],
     },
     {
       name: "JSDoc on an object property",
@@ -139,22 +139,22 @@ ruleTester.run("marking", sealed, {
     {
       name: "class method",
       code: `const R = 1; class C { m() { "use hermetic"; return R; } }`,
-      errors: [method("m")],
+      errors: [free("R", "m")],
     },
     {
       name: "JSDoc on a class field arrow",
       code: `const R = 1; class C { /** @hermetic */ m = () => R; }`,
-      errors: [method("m")],
+      errors: [free("R", "m")],
     },
     {
       name: "getter",
       code: `const R = 1; class C { get v() { "use hermetic"; return R; } }`,
-      errors: [method("v")],
+      errors: [free("R", "v")],
     },
     {
       name: "private method",
       code: `const R = 1; class C { #m() { "use hermetic"; return R; } }`,
-      errors: [method("#m")],
+      errors: [free("R", "#m")],
     },
     {
       name: "anonymous default export",
@@ -341,7 +341,7 @@ ruleTester.run("syntactic escapes", sealed, {
     {
       name: "a hermetic class field arrow",
       code: `class C { f = () => { "use hermetic"; return this.x; }; }`,
-      errors: [method("f")],
+      errors: [escape("lexicalThis")],
     },
     {
       name: "this in a computed key of a class declared inside a hermetic arrow",
@@ -354,9 +354,9 @@ ruleTester.run("syntactic escapes", sealed, {
       errors: [escape("lexicalNewTarget", "g")],
     },
     {
-      name: "a hermetic method, even with super only in an arrow inside it",
+      name: "super in an arrow inside a hermetic method",
       code: `class A extends B { m() { "use hermetic"; return () => super.m(); } }`,
-      errors: [method("m")],
+      errors: [escape("superReference", "m")],
     },
     {
       name: "super in a hermetic arrow inside a method",
@@ -364,14 +364,14 @@ ruleTester.run("syntactic escapes", sealed, {
       errors: [escape("superReference", "g")],
     },
     {
-      name: "a hermetic constructor",
+      name: "a hermetic constructor marks its class, whose heritage reads a free variable",
       code: `class A extends B { constructor() { "use hermetic"; super(); } }`,
-      errors: [method("constructor")],
+      errors: [free("B", "A")],
     },
     {
-      name: "a hermetic object method",
+      name: "super in a hermetic object method",
       code: `const o = { m() { "use hermetic"; return super.toString(); } };`,
-      errors: [method("m")],
+      errors: [escape("superReference", "m")],
     },
     {
       name: "a hermetic function stored in an object property is a function",
@@ -475,6 +475,107 @@ ruleTester.run("types", sealed, {
         { messageId: "typeReference", data: { name: "T", fn: "map" } },
         { messageId: "typeReference", data: { name: "T", fn: "map" } },
       ],
+    },
+  ],
+});
+
+ruleTester.run("hermetic methods", sealed, {
+  valid: [
+    { name: "a method reads its object", code: `class Rect { area() { "use hermetic"; return this.width * this.height; } }` },
+    { name: "a getter", code: `class Rect { get area() { "use hermetic"; return this.width * this.height; } }` },
+    { name: "a setter", code: `class Temp { set celsius(c) { "use hermetic"; this.kelvin = c + 273.15; } }` },
+    { name: "a method calls a sibling through this", code: `class Rect { double() { "use hermetic"; return this.area() * 2; } }` },
+    { name: "an object literal's method", code: `const rect = { area() { "use hermetic"; return this.w * this.h; } };` },
+    { name: "a static method's this is its class", code: `class Rect { static unit() { "use hermetic"; return new this(1, 1); } }` },
+    { name: "an async generator method", code: `class Pages { async *all(n) { "use hermetic"; for (let i = 0; i < n; i++) yield await this.page(i); } }` },
+    { name: "a private name declared by a class inside the method", code: `class A { m() { "use hermetic"; return class { #x = 1; get x() { return this.#x; } }; } }` },
+  ],
+  invalid: [
+    {
+      name: "a private field of its class",
+      code: `class Counter { #n = 0; get n() { "use hermetic"; return this.#n; } }`,
+      errors: [{ ...privateName("#n", "n"), line: 1, column: 63, endColumn: 65 }],
+    },
+    {
+      name: "a private name tested with in",
+      code: `class Point { #x = 0; static is(o) { "use hermetic"; return #x in o; } }`,
+      errors: [privateName("#x", "is")],
+    },
+    {
+      name: "a private method called through this",
+      code: `class Counter { #bump() { return 1; } next() { "use hermetic"; return this.#bump(); } }`,
+      errors: [privateName("#bump", "next")],
+    },
+    {
+      name: "a function stored in a static field, reading a private name of its class",
+      code: `class C { static #count = 0; static read = function () { "use hermetic"; return C.#count; }; }`,
+      errors: [free("C", "read"), privateName("#count", "read")],
+    },
+    {
+      name: "its own class, by name",
+      code: `class Rect { static unit() { "use hermetic"; return new Rect(1, 1); } }`,
+      errors: [free("Rect", "unit")],
+    },
+  ],
+});
+
+ruleTester.run("hermetic classes", sealed, {
+  valid: [
+    {
+      name: "a class whose constructor is marked, with private names it declares and its own name",
+      code: `class Counter {
+  #n;
+  constructor(start) { "use hermetic"; this.#n = start; }
+  next() { return ++this.#n; }
+  static zero() { return new Counter(0); }
+  static is(o) { return #n in o; }
+}`,
+    },
+    { name: "a class expression", code: `const Box = class { constructor(v) { "use hermetic"; this.v = v; } get() { return this.v; } };` },
+    { name: "super in its own methods, with no heritage", code: `class A { constructor() { "use hermetic"; } toString() { return "A:" + super.toString(); } }` },
+    { name: "a class marked by a JSDoc tag, with no constructor", code: `/** @hermetic */\nclass Point { x = 0; move(dx) { this.x += dx; } }` },
+    { name: "a JSDoc comment that only mentions the tag", code: `/** Not @hermetic. */\nclass Clock { now() { return Date.now(); } }` },
+  ],
+  invalid: [
+    {
+      name: "a field initializer reads a global",
+      code: `class Cache { items = new Map(); constructor() { "use hermetic"; } }`,
+      errors: [free("Map", "Cache")],
+    },
+    {
+      name: "a method reads a module-level name",
+      code: `const LIMIT = 10; class Queue { constructor() { "use hermetic"; } full() { return this.size >= LIMIT; } }`,
+      errors: [free("LIMIT", "Queue")],
+    },
+    {
+      name: "this in a computed key runs outside the class",
+      code: `class Keys { [this.name]() {} constructor() { "use hermetic"; } }`,
+      errors: [escape("lexicalThis", "Keys")],
+    },
+    {
+      name: "a static block reads a free variable",
+      code: `class Registry { static { register(this); } constructor() { "use hermetic"; } }`,
+      errors: [free("register", "Registry")],
+    },
+    {
+      name: "a marked method inside a marked class reports its own problem once",
+      code: `const R = 1; class C { constructor() { "use hermetic"; } m() { "use hermetic"; return R; } }`,
+      errors: [free("R", "m")],
+    },
+    {
+      name: "a base class from outside is a free variable",
+      code: `class Outer { #x = 1; static make() { return class extends Base { constructor() { "use hermetic"; super(); } }; } }`,
+      errors: [free("Base", "<anonymous>")],
+    },
+    {
+      name: "an exported class marked by a JSDoc tag",
+      code: `/** @hermetic */\nexport class Cache { items = new Map(); }`,
+      errors: [free("Map", "Cache")],
+    },
+    {
+      name: "a class expression marked by a JSDoc tag on its declaration",
+      code: `/** @hermetic */\nconst Box = class { get() { return VALUE; } };`,
+      errors: [free("VALUE", "Box")],
     },
   ],
 });

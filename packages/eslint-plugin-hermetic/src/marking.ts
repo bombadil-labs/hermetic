@@ -6,6 +6,8 @@ export type FunctionNode =
   | TSESTree.FunctionDeclaration
   | TSESTree.FunctionExpression;
 
+export type ClassNode = TSESTree.ClassDeclaration | TSESTree.ClassExpression;
+
 export function isFunctionNode(node: TSESTree.Node | null | undefined): node is FunctionNode {
   return (
     node?.type === AST_NODE_TYPES.ArrowFunctionExpression ||
@@ -15,9 +17,10 @@ export function isFunctionNode(node: TSESTree.Node | null | undefined): node is 
 }
 
 /**
- * A method, accessor or other class member. Its `this` is its object, not its
- * inputs, so it can't be hermetic yet. A function stored in an object
- * literal's property, `{ area: function () {} }`, is still a function.
+ * A method, accessor or other class member, whose `this` is its object. It
+ * can be hermetic, reading nothing but its arguments and that object, but the
+ * lift doesn't split it yet. A function stored in an object literal's
+ * property, `{ area: function () {} }`, is still a function.
  */
 export function isMethod(node: FunctionNode): boolean {
   const parent = node.parent;
@@ -81,10 +84,10 @@ function lineIndent(sourceCode: Readonly<TSESLint.SourceCode>, line: number): st
 }
 
 /**
- * True when a JSDoc block directly before the function, or before the
- * declaration that introduces it, has an `@hermetic` tag.
+ * True when a JSDoc block directly before the function or class, or before
+ * the declaration that introduces it, has an `@hermetic` tag.
  */
-export function hasHermeticTag(node: FunctionNode, sourceCode: Readonly<TSESLint.SourceCode>): boolean {
+export function hasHermeticTag(node: FunctionNode | ClassNode, sourceCode: Readonly<TSESLint.SourceCode>): boolean {
   return annotationTargets(node).some((target) =>
     sourceCode
       .getCommentsBefore(target)
@@ -103,7 +106,7 @@ export function isHermeticJSDoc(commentValue: string): boolean {
 }
 
 /** The nodes a JSDoc block may sit in front of to annotate `node`. */
-function annotationTargets(node: FunctionNode): TSESTree.Node[] {
+function annotationTargets(node: FunctionNode | ClassNode): TSESTree.Node[] {
   const targets: TSESTree.Node[] = [node];
   let declaration: TSESTree.Node = node;
   const parent = node.parent;
@@ -135,6 +138,24 @@ function annotationTargets(node: FunctionNode): TSESTree.Node[] {
     targets.push(outer);
   }
   return targets;
+}
+
+/** The class a constructor belongs to, when `node` is a constructor. */
+export function constructedClass(node: FunctionNode): ClassNode | undefined {
+  const parent = node.parent;
+  if (parent.type !== AST_NODE_TYPES.MethodDefinition || parent.kind !== "constructor" || parent.value !== node) return undefined;
+  return parent.parent.parent;
+}
+
+/** A readable name for a class in diagnostics. */
+export function className(node: ClassNode): string {
+  if (node.id) return node.id.name;
+  const parent = node.parent;
+  if (parent.type === AST_NODE_TYPES.VariableDeclarator && parent.init === node && parent.id.type === AST_NODE_TYPES.Identifier) {
+    return parent.id.name;
+  }
+  if (parent.type === AST_NODE_TYPES.ExportDefaultDeclaration) return "default";
+  return "<anonymous>";
 }
 
 /** A readable name for diagnostics. */

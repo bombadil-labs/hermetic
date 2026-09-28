@@ -1,7 +1,15 @@
 import { AST_NODE_TYPES, AST_TOKEN_TYPES, type TSESLint, type TSESTree } from "@typescript-eslint/utils";
 import { analyze, createEnvironment, type HermeticSettings, SETTINGS_SCHEMA } from "../analysis.ts";
 import { isBinding, liftFix, planLift } from "../lift.ts";
-import { directiveInsertion, type FunctionNode, functionName, isFunctionNode, isMarkedHermetic, isMethod } from "../marking.ts";
+import {
+  constructedClass,
+  directiveInsertion,
+  type FunctionNode,
+  functionName,
+  isFunctionNode,
+  isMarkedHermetic,
+  isMethod,
+} from "../marking.ts";
 import { createRule } from "./sealed.ts";
 
 export interface PreferHermeticOptions extends HermeticSettings {
@@ -70,7 +78,8 @@ export const preferHermetic = createRule<[PreferHermeticOptions], MessageIds>({
           });
           return;
         }
-        if (!options.lift || isBinding(node, sourceCode)) return;
+        // The lift splits functions; a method's `this` is taken by its object, so it has nowhere to put what it lifts yet.
+        if (!options.lift || isMethod(node) || isBinding(node, sourceCode)) return;
         const plan = planLift(node, problems, env, { importsSettled: options.importsSettled === true });
         if (!plan) return;
         const names = [...plan.lifted.keys()];
@@ -87,12 +96,12 @@ export const preferHermetic = createRule<[PreferHermeticOptions], MessageIds>({
 
 /**
  * Outermost functions bound to a name: declarations, variable initializers,
- * and functions stored in object properties. Methods can't be hermetic yet,
- * and callbacks passed as arguments and IIFEs are ignored; marking them would
- * be noise.
+ * functions stored in object properties, and methods. Callbacks passed as
+ * arguments and IIFEs are ignored; marking them would be noise. So are
+ * constructors: marking one marks its whole class.
  */
 export function isCandidate(node: FunctionNode): boolean {
-  if (isMethod(node)) return false;
+  if (constructedClass(node)) return false;
   for (let ancestor: TSESTree.Node | undefined = node.parent; ancestor; ancestor = ancestor.parent) {
     if (isFunctionNode(ancestor)) return false;
   }

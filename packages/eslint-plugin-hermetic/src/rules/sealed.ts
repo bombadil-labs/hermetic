@@ -1,6 +1,6 @@
 import { ESLintUtils, type TSESLint, type TSESTree } from "@typescript-eslint/utils";
 import { analyze, createEnvironment, type HermeticSettings, type MessageIds, SETTINGS_SCHEMA } from "../analysis.ts";
-import { type FunctionNode, functionName, isMarkedHermetic, isMethod } from "../marking.ts";
+import { type ClassNode, className, constructedClass, type FunctionNode, functionName, hasHermeticTag, isMarkedHermetic } from "../marking.ts";
 
 export type { MessageIds } from "../analysis.ts";
 
@@ -34,14 +34,14 @@ export const sealed: TSESLint.RuleModule<MessageIds, [SealedOptions]> & { name: 
     messages: {
       freeVariable:
         "'{{name}}' is a free variable in hermetic function '{{fn}}'. Pass it through 'this' or an argument.",
-      method:
-        "'{{fn}}' is a method, and methods can't be hermetic yet: a method's 'this' is its object, not its inputs. Make it a function, and pass the object in.",
+      privateName:
+        "'{{name}}' in hermetic function '{{fn}}' is a private name of the class around it, so the function works only inside that class. Read it through a public property of 'this', or an argument.",
       typeReference:
         "Type reference '{{name}}' in hermetic function '{{fn}}' refers to a declaration outside it. With types: \"structural-only\", write the type inline.",
       lexicalThis:
-        "'this' in hermetic arrow function '{{fn}}' comes from the enclosing scope, not from its inputs. Use a non-arrow function to receive 'this'.",
+        "'this' in hermetic function '{{fn}}' comes from the enclosing scope, not from its inputs. Only a function that isn't an arrow receives its own 'this'.",
       lexicalNewTarget:
-        "'new.target' in hermetic arrow function '{{fn}}' comes from the enclosing scope. Use a non-arrow function.",
+        "'new.target' in hermetic function '{{fn}}' comes from the enclosing scope. Only a function that isn't an arrow has its own 'new.target'.",
       superReference:
         "'super' in hermetic function '{{fn}}' refers to the enclosing class or object. Pass the behavior through 'this' or an argument.",
       importMeta:
@@ -56,24 +56,35 @@ export const sealed: TSESLint.RuleModule<MessageIds, [SealedOptions]> & { name: 
     const marked = new Map<TSESTree.Node, string>();
     /** Nested hermetic functions share escapes; each node is reported once, for the innermost. */
     const reported = new Set<TSESTree.Node>();
+    const check = (node: FunctionNode | ClassNode, name: string): void => {
+      for (const { node: target, messageId, data } of analyze(node, name, env)) {
+        if (reported.has(target)) continue;
+        reported.add(target);
+        context.report({ node: target, messageId, data });
+      }
+    };
 
     return {
+      // A JSDoc tag before a class marks it, as the directive in its constructor does.
+      "ClassDeclaration, ClassExpression"(node: ClassNode) {
+        if (hasHermeticTag(node, context.sourceCode)) marked.set(node, className(node));
+      },
       ":function"(node: FunctionNode) {
-        if (isMarkedHermetic(node, context.sourceCode)) marked.set(node, functionName(node));
+        if (!isMarkedHermetic(node, context.sourceCode)) return;
+        // A class is its constructor: marking the constructor marks the whole class, whose source it is.
+        const owner = constructedClass(node);
+        if (owner) marked.set(owner, className(owner));
+        else marked.set(node, functionName(node));
       },
       // Inner functions exit first, so shared escapes are attributed to the innermost hermetic function.
       ":function:exit"(node: FunctionNode) {
         const name = marked.get(node);
-        if (name === undefined) return;
-        if (isMethod(node)) {
-          context.report({ node: node.parent, messageId: "method", data: { fn: name } });
-          return;
-        }
-        for (const { node: target, messageId, data } of analyze(node, name, env)) {
-          if (reported.has(target)) continue;
-          reported.add(target);
-          context.report({ node: target, messageId, data });
-        }
+        if (name !== undefined) check(node, name);
+      },
+      // A class exits after its members, so a marked method inside it reports its own escapes first.
+      "ClassDeclaration, ClassExpression:exit"(node: ClassNode) {
+        const name = marked.get(node);
+        if (name !== undefined) check(node, name);
       },
     };
   },

@@ -57,6 +57,7 @@ describe("tryLift", () => {
         export const own = () => this.x + R;
       `),
     ).toEqual({
+      m: "a method",
       member: "an object member",
       typed: "a typed variable",
       hoisted: "a declaration that reads unsettled names",

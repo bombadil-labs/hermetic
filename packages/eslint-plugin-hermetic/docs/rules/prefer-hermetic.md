@@ -6,7 +6,7 @@ Mark functions that are already hermetic, and optionally rewrite others so they 
 
 ## Rule details
 
-The rule considers the outermost functions bound to a name: function declarations, variable initializers, and functions stored in object properties. Methods can't be hermetic yet, so they aren't considered. Callbacks passed as arguments and IIFEs are ignored, and so are functions that are already marked.
+The rule considers the outermost functions bound to a name: function declarations, variable initializers, functions stored in object properties, and methods. Callbacks passed as arguments and IIFEs are ignored, and so are functions that are already marked. So are constructors: marking one marks its whole class, which is for its author to decide.
 
 - **`alreadyHermetic`**: the function would pass `hermetic/sealed` as it stands. The fix marks it. A block body gets `"use hermetic"` straight after its opening brace, so comments such as `// @ts-expect-error` stay with the statements they precede. An expression-bodied arrow gets an `@hermetic` tag, added to its JSDoc block if it has one.
 - **`liftable`**, with `lift: true`: the function's only hidden inputs are module-level values and globals, built-ins such as `Math` included. The fix moves the body into a new hermetic function that reads them from `this`, and turns the original function into a wrapper that calls it with them.
@@ -112,6 +112,7 @@ The fix only applies when the rewrite can't change behavior or types. It skips:
 - A direct call to `eval`, which sees the caller's scope. Called through `this`, it wouldn't.
 - Function declarations that read anything unsettled: named imports unless `importsSettled` is on, module constants, globals or mutable state, like `report` above.
 - Named function expressions, declarations with several declarators, and variables with a type annotation, such as `const f: Handler = ...`, whose function takes its type from the annotation.
+- Methods and accessors. A method's `this` is its object, so the lift has nowhere to pass in what it lifts. A method that is already hermetic is still marked.
 - Functions inside other functions, blocks or classes.
 - `this` parameters, `asserts` return types, and `@ts-expect-error`, `@ts-ignore` or `@ts-nocheck` comments, whose target lines would move.
 - Signatures TypeScript can't repeat faithfully: a rest parameter in a generic function typed as anything but a type parameter, an array or a tuple, and a mapped type with an `as` clause written into the signature.

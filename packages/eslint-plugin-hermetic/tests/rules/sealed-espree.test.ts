@@ -6,6 +6,8 @@ const ruleTester = new RuleTester({ languageOptions: { ecmaVersion: "latest", so
 
 ruleTester.run("sealed with espree", sealed as unknown as Rule.RuleModule, {
   valid: [
+    { code: `const o = { m() { "use hermetic"; return this.x; } };` },
+    { code: `class C { #x = 0; constructor() { "use hermetic"; } get x() { return this.#x; } }` },
     `function f(a) { "use hermetic"; return this.Math.max(a, 1); }`,
     `const g = function self(n) { "use hermetic"; return n ? self(n - 1) : 0; };`,
     `function fact(n) { "use hermetic"; return n <= 1 ? 1 : n * fact(n - 1); }`,
@@ -47,8 +49,8 @@ ruleTester.run("sealed with espree", sealed as unknown as Rule.RuleModule, {
       ],
     },
     {
-      code: `const o = { m() { "use hermetic"; return this.x; } };`,
-      errors: [{ messageId: "method", data: { fn: "m" } }],
+      code: `class C { #x = 0; m() { "use hermetic"; return this.#x; } }`,
+      errors: [{ messageId: "privateName", data: { name: "#x", fn: "m" } }],
     },
   ],
 });

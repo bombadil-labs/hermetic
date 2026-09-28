@@ -2,7 +2,7 @@ import { AST_NODE_TYPES, type TSESLint, type TSESTree } from "@typescript-eslint
 import type { JSONSchema4 } from "@typescript-eslint/utils/json-schema";
 import { childNodes } from "./ast.ts";
 import { IMMUTABLE_GLOBALS } from "@bombadil/hermetic";
-import type { FunctionNode } from "./marking.ts";
+import type { ClassNode, FunctionNode } from "./marking.ts";
 
 type Reference = TSESLint.Scope.Reference;
 type Variable = TSESLint.Scope.Variable;
@@ -15,7 +15,7 @@ export type MessageIds =
   | "jsx"
   | "lexicalNewTarget"
   | "lexicalThis"
-  | "method"
+  | "privateName"
   | "superReference"
   | "typeReference";
 
@@ -86,13 +86,15 @@ function readSettings(settings: Record<string, unknown>): HermeticSettings {
 
 /**
  * Every way `fn` reaches outside itself: references that escape it, and the
- * syntactic escapes scope analysis cannot see.
+ * syntactic escapes scope analysis cannot see. A method's `this` is its
+ * object, one of its inputs, as a function's `this` is. A class is analyzed
+ * whole: its heritage, fields, static blocks and methods.
  */
-export function analyze(fn: FunctionNode, name: string, env: Environment): Problem[] {
+export function analyze(fn: FunctionNode | ClassNode, name: string, env: Environment): Problem[] {
   return [...referenceProblems(fn, name, env), ...escapeProblems(fn, name, env)];
 }
 
-function referenceProblems(fn: FunctionNode, fnName: string, env: Environment): Problem[] {
+function referenceProblems(fn: FunctionNode | ClassNode, fnName: string, env: Environment): Problem[] {
   const problems: Problem[] = [];
   const scope = env.sourceCode.scopeManager?.acquire(fn);
   if (!scope) return problems;
@@ -113,8 +115,8 @@ function referenceProblems(fn: FunctionNode, fnName: string, env: Environment): 
   return problems;
 }
 
-/** `this`, `super`, `new.target`, `import.meta`, `import()` and JSX that reach outside `fn`. */
-function escapeProblems(fn: FunctionNode, fnName: string, env: Environment): Problem[] {
+/** `this`, `super`, `new.target`, private names, `import.meta`, `import()` and JSX that reach outside `fn`. */
+function escapeProblems(fn: FunctionNode | ClassNode, fnName: string, env: Environment): Problem[] {
   const problems: Problem[] = [];
   const data = { fn: fnName };
   const visit = (node: TSESTree.Node): void => {
@@ -129,6 +131,11 @@ function escapeProblems(fn: FunctionNode, fnName: string, env: Environment): Pro
         if (node.meta.name === "import") problems.push({ node, messageId: "importMeta", data });
         else if (node.meta.name === "new" && bindsOutside(node, fn, false)) {
           problems.push({ node, messageId: "lexicalNewTarget", data });
+        }
+        break;
+      case AST_NODE_TYPES.PrivateIdentifier:
+        if (isPrivateReference(node) && declaredOutside(node, fn)) {
+          problems.push({ node, messageId: "privateName", data: { name: `#${node.name}`, fn: fnName } });
         }
         break;
       case AST_NODE_TYPES.ImportExpression:
@@ -150,20 +157,55 @@ function escapeProblems(fn: FunctionNode, fnName: string, env: Environment): Pro
 /**
  * True when the `this`, `new.target` or `super` at `node` is bound outside
  * `fn`. A boundary inside `fn` binds it there. Reaching `fn` itself escapes if
- * `fn` is an arrow; for `super`, it also escapes a method, whose home object
+ * `fn` is an arrow, or a class, whose own heritage and computed keys see the
+ * scope around it; for `super`, it also escapes a method, whose home object
  * lies outside it.
  */
-function bindsOutside(node: TSESTree.Node, fn: FunctionNode, superLike: boolean): boolean {
+function bindsOutside(node: TSESTree.Node, fn: FunctionNode | ClassNode, superLike: boolean): boolean {
   let child: TSESTree.Node = node;
   for (let ancestor = node.parent; ancestor; child = ancestor, ancestor = ancestor.parent) {
-    if (ancestor === fn) return fn.type === AST_NODE_TYPES.ArrowFunctionExpression || superLike;
+    if (ancestor === fn) return fn.type === AST_NODE_TYPES.ArrowFunctionExpression || isClass(fn) || superLike;
     if (isThisBoundary(ancestor, child)) return false;
   }
   return false;
 }
 
+function isClass(node: TSESTree.Node): node is ClassNode {
+  return node.type === AST_NODE_TYPES.ClassDeclaration || node.type === AST_NODE_TYPES.ClassExpression;
+}
+
+/** A private name that is used, as in `this.#count` or `#count in value`, rather than declared as a member's key. */
+function isPrivateReference(node: TSESTree.PrivateIdentifier): boolean {
+  const parent = node.parent;
+  return (
+    (parent.type === AST_NODE_TYPES.MemberExpression && parent.property === node) ||
+    (parent.type === AST_NODE_TYPES.BinaryExpression && parent.left === node)
+  );
+}
+
+/**
+ * True when the class that declares the private name at `node` lies outside
+ * `fn`, so `fn` works only inside that class. The nearest class body that
+ * declares the name is the one it refers to. A heritage clause sees the
+ * private names around its class, not the class's own.
+ */
+function declaredOutside(node: TSESTree.PrivateIdentifier, fn: FunctionNode | ClassNode): boolean {
+  for (let ancestor: TSESTree.Node | undefined = node.parent; ancestor; ancestor = ancestor.parent) {
+    if (ancestor.type === AST_NODE_TYPES.ClassBody && declaresPrivate(ancestor, node.name)) return false;
+    if (ancestor === fn) return true;
+  }
+  return false;
+}
+
+function declaresPrivate(body: TSESTree.ClassBody, name: string): boolean {
+  return body.body.some(
+    (member) =>
+      "key" in member && member.key.type === AST_NODE_TYPES.PrivateIdentifier && member.key.name === name,
+  );
+}
+
 /** A JSX element or fragment with no JSX ancestor inside `fn`, so each tree is reported once. */
-function isJsxRoot(node: TSESTree.Node, fn: FunctionNode): boolean {
+function isJsxRoot(node: TSESTree.Node, fn: FunctionNode | ClassNode): boolean {
   for (let ancestor = node.parent; ancestor && ancestor !== fn; ancestor = ancestor.parent) {
     if (ancestor.type === AST_NODE_TYPES.JSXElement || ancestor.type === AST_NODE_TYPES.JSXFragment) return false;
   }
@@ -196,7 +238,7 @@ const RUNTIME_TS_NODES: ReadonlySet<string> = new Set([
  * True when a reference is erased at runtime: a type reference, or any
  * reference inside a type annotation, including `typeof x` in a type position.
  */
-export function isTypeOnly(reference: Reference, fn: FunctionNode): boolean {
+export function isTypeOnly(reference: Reference, fn: FunctionNode | ClassNode): boolean {
   if (reference.isTypeReference && !reference.isValueReference) return true;
   for (let node: TSESTree.Node | undefined = reference.identifier.parent; node && node !== fn; node = node.parent) {
     if (node.type.startsWith("TS") && !RUNTIME_TS_NODES.has(node.type)) return true;
@@ -210,7 +252,7 @@ export function isTypeOnly(reference: Reference, fn: FunctionNode): boolean {
  * name, so the reference survives relocation. That holds only while the
  * binding is never reassigned.
  */
-function isOwnName(reference: Reference, fn: FunctionNode): boolean {
+function isOwnName(reference: Reference, fn: FunctionNode | ClassNode): boolean {
   const variable = reference.resolved;
   return (
     fn.type === AST_NODE_TYPES.FunctionDeclaration &&

@@ -6,6 +6,7 @@
 - `confine` runs a hermetic function in a [Hardened JS](https://hardenedjs.org/) compartment whose global object is empty.
 - `intrinsics` picks the deterministic built-ins out of a realm, for bindings to pass in.
 - `inject`, which is optional and has its own entry point, binds a hermetic function to exactly the names it reads.
+- `methods`, with its own entry point, builds a class out of hermetic functions, installed as its methods.
 - `record` and `replay`, with their own entry point, capture everything a call does with its inputs and play it back as a test.
 - `doctests`, with its own entry point, runs the examples in a hermetic function's JSDoc, against the function and against a copy made from its source.
 
@@ -42,21 +43,21 @@ check(`function applyDiscount(invoice) {
 | Kind | Example | Why |
 | --- | --- | --- |
 | `freeVariable` | `rate`, `Math` | A name that isn't declared in the function: an import, a module-level variable, or a global, built-ins included. `undefined`, `NaN` and `Infinity` read like keywords. |
-| `lexicalThis`, `lexicalNewTarget` | `() => this.total` | An arrow function's `this` and `new.target` come from the enclosing scope, not from its inputs. |
+| `lexicalThis`, `lexicalNewTarget` | `() => this.total` | An arrow function's `this` and `new.target` come from the enclosing scope, not from its inputs. So do those in a class's heritage clause and computed keys. |
 | `superReference` | `() => super.save()` | It refers to the enclosing class or object. |
 | `importMeta`, `dynamicImport` | `import.meta.url` | They refer to the enclosing module, or load code. |
 | `withStatement` | `with (options) { … }` | It can turn any name inside it into a member of its object. |
-| `method` | `area() { … }` | Methods, accessors and classes can't be hermetic yet: a method's `this` is its object, not its inputs. `name` says which it is. |
+| `privateName` | `this.#count` | A private name that a class outside the source declares. Only that class can use it, so the source can't be rebuilt or moved without it. |
 | `syntax` | | The source doesn't parse. `name` holds the parser's message. |
 | `notAFunction` | | The source isn't a single function, method, accessor or class. |
 
 The result:
 
-- **`form`**: `"function"` for a function or arrow function, including async functions and generators; `"method"` for a method or accessor, whose source looks like `area() { … }`; `"class"` for a class. Only functions can be hermetic. Anything else is refused, including source that holds a function followed by more code, so nothing can get past the check alongside a function.
-- **`marked`**: the function's body starts with a `"use hermetic"` directive. A JSDoc `@hermetic` tag comes before a function, not inside it, so it isn't part of the source and doesn't count here.
-- **`hermetic`**: it is a function, and `check` found no problems. `marked` and `hermetic` are separate: the directive says the function should be hermetic, and `check` tests whether it is.
+- **`form`**: `"function"` for a function or arrow function, including async functions and generators; `"method"` for a method or accessor, whose source looks like `area() { … }`; `"class"` for a class, whose source is also its constructor's. Anything else is refused, including source that holds a function followed by more code, so nothing can get past the check alongside a function.
+- **`marked`**: the function's body starts with a `"use hermetic"` directive; for a class, its constructor's body. A JSDoc `@hermetic` tag comes before a function, not inside it, so it isn't part of the source and doesn't count here.
+- **`hermetic`**: `check` found no problems. A method's inputs are its arguments and its object, as `this`. A class is read as one function, so it is hermetic when nothing in it reads anything from outside the class. `marked` and `hermetic` are separate: the directive says the function should be hermetic, and `check` tests whether it is.
 - **`problems`**: in source order, with offsets into the source.
-- **`needs`**: the names the function reads from `this`, whether as `this.clamp` or as `const { clamp } = this`, in the order it first reads them. For a hermetic function, that's everything it needs from the code that binds it. It's undefined when the function uses `this` in a way that doesn't name what it reads, as in `this[key]` or `helper(this)`, and for anything but a function. An arrow function needs nothing, since its `this` isn't one of its inputs.
+- **`needs`**: the names a function or method reads from `this`, whether as `this.clamp` or as `const { clamp } = this`, in the order it first reads them. For a hermetic function, that's everything it needs from the code that binds it. It's undefined when the function uses `this` in a way that doesn't name what it reads, as in `this[key]` or `helper(this)`, and for a class. An arrow function needs nothing, since its `this` isn't one of its inputs.
 
 `check` reports what `hermetic/sealed` reports. On the 14,416 functions and methods in the published JavaScript of Effect 3.22.2, RxJS 7.8.2 and TanStack Query 5.103.2, the two report the same problems at the same places, every one. (Class constructors aren't counted: a constructor's source is its whole class.) `npm run corpus -- crosscheck` in the repository reproduces this.
 
@@ -132,6 +133,49 @@ export const cents = inject(toCents, root); // toCents gets a frozen { Math }, a
 
 Any object can be the environment, so a DI container can supply one. Awilix's `container.cradle` works as it is: it reports its registrations as own properties, and `inject` resolves only the names the function reads. With a container that resolves by token, such as tsyringe or InversifyJS, resolve what the function needs into an object first.
 
+## methods
+
+A method's `this` is the object it's called on, one of its inputs, so a method can be hermetic: it reads nothing but its arguments and its object. `methods`, which has its own entry point, builds a class out of hermetic functions, each of which can still be tested alone:
+
+```ts
+import { methods } from "@bombadil/hermetic/methods";
+
+function area(this: { width: number; height: number }) {
+  "use hermetic";
+  return this.width * this.height;
+}
+
+function summary(this: { area(): number }) {
+  "use hermetic";
+  return `area ${this.area()}`;
+}
+
+class Shape {
+  width: number;
+  height: number;
+  constructor(width: number, height: number) {
+    this.width = width;
+    this.height = height;
+  }
+}
+
+export const Rect = methods(Shape, { area, summary });
+new Rect(2, 3).summary(); // "area 6"
+
+// In a test, any object with what a function reads will do.
+area.call({ width: 2, height: 3 }); // 6
+summary.call({ area: () => 7 }); // "area 7"
+```
+
+- **The class binds them.** `methods` puts each function on the class's prototype, as a class's own methods are: writable, configurable and not enumerable. It returns the class itself, typed with the new methods, and a class can extend it.
+- **TypeScript checks each `this`.** A function's `this` type must accept an instance of the class with all the functions installed, so one can call another through `this`, as `summary` calls `area`. A function that needs what an instance doesn't have is a type error at its name.
+- **Nothing is installed unless everything can be.** `methods` throws a `HermeticError` when a function isn't hermetic, or is a class, and a `TypeError` when the class already has a member of its own by one of the names. It checks every function before it installs any.
+- **Calls on an instance record and replay.** `record(Rect.prototype.area, new Rect(2, 5), save)` records a call with the instance as `this`, and `replay(area, recording)` plays it back without the class.
+
+A hermetic method can't use what only its class can reach: `super`, the class's private names such as `#count`, or the class by name. A method that uses a private name works only inside the class that declares it, so `check` reports it as a `privateName`.
+
+A whole class can be hermetic too. Mark its constructor, and `check` reads everything in the class as one function, fields, static blocks and methods included. Its `super` and private names are then its own, since they are part of its source.
+
 ## confine
 
 ```ts
@@ -146,7 +190,7 @@ const round = confine<(this: Pick<Intrinsics, "Math">, n: number) => number>(
 round.call(harden(intrinsics(globalThis)), 2.6); // 3
 ```
 
-`confine` checks a function, then evaluates its source in a new Hardened JS compartment whose global object is empty, and returns the function the compartment made, hardened. If the function isn't hermetic, it throws a `HermeticError` with the problems `check` found. Its generic parameter types the result when you pass source text.
+`confine` checks a function, then evaluates its source in a new Hardened JS compartment whose global object is empty, and returns the function the compartment made, hardened. If the function isn't hermetic, it throws a `HermeticError` with the problems `check` found. Its generic parameter types the result when you pass source text. A method's source, such as `area() { … }`, and a class's work the same way.
 
 `check` looks at the names a function uses. A function can also reach things through values, which a check of names can't follow, and the compartment covers those:
 
@@ -166,6 +210,7 @@ Whatever you pass to a confined function is still its to use and change, so hard
 
 - **The source holds text Hardened JS rejects,** even inside a string or comment: `import(`, `<!--` or `-->`.
 - **The function only works in sloppy mode.** Compartments run strict-mode code.
+- **A method's computed key reads a global,** as in `*[Symbol.iterator]() { … }`. The key isn't part of the method, so `check` doesn't read it, but rebuilding the method evaluates it, where the global object is empty.
 
 ## record and replay
 
@@ -232,7 +277,7 @@ describe("money's examples", () => {
 });
 ```
 
-- **Which functions.** Each exported function marked hermetic, by its directive or an `@hermetic` tag, gets a test for each `@example`, named after its `<caption>` if it has one. A function marked hermetic that `check` finds isn't fails its tests with a `HermeticError`.
+- **Which functions.** Each exported function marked hermetic, by its directive or an `@hermetic` tag, gets a test for each `@example`, named after its `<caption>` if it has one. A class counts, marked by its constructor's directive or the tag. A function marked hermetic that `check` finds isn't fails its tests with a `HermeticError`.
 - **Two runs.** Each example runs with the function the module exports, then with a copy made from its source alone. The copy can't see anything the source doesn't hold, such as a helper the compiler added outside the function.
 - **What an example checks.** An example is JavaScript. A line that ends in `// => value` checks that the code before the comment gives `value`, compared by structure; a line that ends in `// throws`, `// throws TypeError` or `// throws TypeError: message` checks that it throws such an error. Other lines run as they are, and any line may use `await`. A checked expression has to fit on its line.
 - **What an example can use.** The function, by its name, and any global. To pass other values, give `doctests` a `scope`: `doctests(money, source, { scope: { env } })`.
@@ -282,6 +327,11 @@ interface Doctest {
   run: () => Promise<void>;
 }
 class DoctestError extends Error {}
+// From "@bombadil/hermetic/methods":
+function methods<C extends abstract new (...args: never[]) => object, M extends Record<string, (...args: never[]) => unknown>>(
+  base: C,
+  functions: M, // each one's this must accept an instance with all of them installed
+): WithMethods<C, M>; // base itself, whose instances have the functions as methods
 class HermeticError extends Error {
   readonly source: string;
   readonly problems: readonly Problem[];

@@ -43,7 +43,7 @@ export default defineConfig(
 | [`hermetic/sealed`](https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/sealed.md) | Reports the hidden inputs of functions marked hermetic. In the recommended config. | |
 | [`hermetic/prefer-hermetic`](https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/prefer-hermetic.md) | Reports functions that are already hermetic, and with `lift`, functions it can rewrite to be hermetic. | Marks, or lifts |
 
-**Moving from `@bombadil/hermetic` 0.2.** Up to 0.2.0, the rules were published as `@bombadil/hermetic`. Install `@bombadil/eslint-plugin-hermetic` instead, and change the import in `eslint.config.js`. Two things changed with it. Hermetic functions read no globals now, not even built-ins, so the `ground` and `aliasing` settings are gone. And methods can't be hermetic yet.
+**Moving from `@bombadil/hermetic` 0.2.** Up to 0.2.0, the rules were published as `@bombadil/hermetic`. Install `@bombadil/eslint-plugin-hermetic` instead, and change the import in `eslint.config.js`. Two things changed with it. Hermetic functions read no globals now, not even built-ins, so the `ground` and `aliasing` settings are gone. And a hermetic method can't use its class's private names, such as `#count`, since it would then work only inside that class.
 
 ## Marking a function
 
@@ -65,7 +65,26 @@ A JSDoc `@hermetic` tag at the start of a line also marks a function. It works o
 export const cents = (dollars: number) => dollars * 100;
 ```
 
-Both forms apply to function declarations, function expressions and arrow functions, including a function stored in an object's property. Methods can't be hermetic yet: a method's `this` is its object, not its inputs, so `hermetic/sealed` reports a marked method, accessor or class field.
+Both forms apply to function declarations, function expressions, arrow functions and methods, including a function stored in an object's property.
+
+### Methods and classes
+
+A method's `this` is the object it's called on, one of its inputs, so a method can be hermetic: it reads nothing but its arguments and its object. It can't use what only its class can reach, such as `super` or the class's private names, so it works on any object that has what it reads. [`methods`](https://github.com/bombadil-labs/hermetic/tree/main/packages/hermetic#methods) in `@bombadil/hermetic` builds a class out of standalone hermetic functions, each of which can be tested alone.
+
+A whole class can be hermetic too. Mark its constructor, or put an `@hermetic` tag in a JSDoc block before the class, and `hermetic/sealed` checks everything in it as one function: field initializers, static blocks and methods included. Its `super` and private names are then its own.
+
+```ts
+class Tally {
+  #count: number;
+  constructor(start: number) {
+    "use hermetic";
+    this.#count = start;
+  }
+  next() {
+    return ++this.#count;
+  }
+}
+```
 
 ## What the rule reports
 
@@ -74,9 +93,9 @@ Both forms apply to function declarations, function expressions and arrow functi
 | Reported | Example | Why |
 | --- | --- | --- |
 | Free variables | `return a * RATE;`, `Math.max(a, b)` | A hidden input. This includes imports, other hermetic functions, globals, built-ins such as `Math`, and `typeof window`. |
-| A marked method | `class C { area() { "use hermetic"; … } }` | Methods can't be hermetic yet. |
+| A private name of the class around it | `this.#count` in a hermetic method | The method would work only inside that class. |
 | `this` or `new.target` in a hermetic arrow function | `() => { "use hermetic"; return this.x; }` | An arrow function's `this` comes from the enclosing scope, not from its inputs. |
-| `super` | `() => super.method()` | It refers to the enclosing class or object. |
+| `super` | `super.save()` in a hermetic method | It refers to the enclosing class or object. |
 | `import.meta`, `import()` | `import.meta.url` | They refer to the enclosing module, or load code. |
 | JSX | `return <div />;` | It compiles to a call to the JSX factory, which is a free variable. |
 

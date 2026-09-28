@@ -1,5 +1,6 @@
-import { check } from "./check.ts";
+import { type CheckResult, check } from "./check.ts";
 import { notHermetic } from "./confine.ts";
+import { onlyMember, rebuildable } from "./rebuild.ts";
 
 /** One function's examples, as a test: `run` resolves when they all hold, and rejects at the first that doesn't. */
 export interface Doctest {
@@ -22,7 +23,8 @@ export class DoctestError extends Error {
  * `@example` of an exported function marked hermetic becomes one test, which
  * runs the example twice: with the function the module exports, and with a
  * copy made from its source alone, `new Function("return " + fn.toString())()`.
- * A hermetic function's source is all of its behavior, so both must pass.
+ * A hermetic function's source is all of its behavior, so both must pass. A
+ * class is a function too, marked by its constructor's directive or the tag.
  *
  * An example is JavaScript. A line that ends in `// => value` checks that the
  * code before the comment evaluates to `value`, compared by structure; one
@@ -51,7 +53,7 @@ export function doctests(module: Readonly<Record<string, unknown>>, source: stri
         run: async () => {
           if (!result.hermetic) throw notHermetic(text, result.problems);
           await runExample(example, name, fn, options.scope ?? {}, "as exported");
-          await runExample(example, name, relocate(text), options.scope ?? {}, "rebuilt from its source");
+          await runExample(example, name, relocate(text, result.form), options.scope ?? {}, "rebuilt from its source");
         },
       });
     });
@@ -64,12 +66,12 @@ interface Example {
   readonly lines: readonly string[];
 }
 
-/** Each JSDoc comment in `source` that comes right before a named function or variable, with that name. */
+/** Each JSDoc comment in `source` that comes right before a named function, class or variable, with that name. */
 function documented(source: string): { name: string; doc: string }[] {
   const declaration =
-    /\/\*\*([\s\S]*?)\*\/\s*(?:export\s+(?:default\s+)?)?(?:(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)|(?:const|let|var)\s+([A-Za-z_$][\w$]*))/g;
+    /\/\*\*([\s\S]*?)\*\/\s*(?:export\s+(?:default\s+)?)?(?:(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)|(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)|(?:const|let|var)\s+([A-Za-z_$][\w$]*))/g;
   return [...source.matchAll(declaration)].map((match) => ({
-    name: match[2] ?? match[3] ?? "",
+    name: match[2] ?? match[3] ?? match[4] ?? "",
     doc: (match[1] ?? "")
       .split(/\r?\n/)
       .map((line) => line.replace(/^\s*\* ?/, ""))
@@ -105,9 +107,10 @@ function examplesIn(doc: string): Example[] {
   return examples;
 }
 
-/** The function its source makes, evaluated on its own. */
-function relocate(text: string): unknown {
-  return new Function(`"use strict"; return (${text});`)();
+/** The function, method or class its source makes, evaluated on its own. */
+function relocate(text: string, form: CheckResult["form"]): unknown {
+  const made: unknown = new Function(`"use strict"; return ${rebuildable(text, form)};`)();
+  return form === "method" ? onlyMember(made) : made;
 }
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (...args: string[]) => (...args: unknown[]) => Promise<void>;

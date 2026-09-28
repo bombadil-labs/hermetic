@@ -3,11 +3,11 @@
 // `npm run corpus -- bind` type-checks the result, and `effect --bind` and
 // `bench --bind` run Effect's suite and benchmarks on it.
 //
-// A binding is rebound only in the exact shape the lift writes: a `const`
+// A wrapper is rebound only in the exact shape the lift writes: a `const`
 // whose whole body is `core.call(context, ...parameters)`, forwarding every
 // parameter in order, where the core is a function declaration marked
 // hermetic and the context is an object literal or the shared context the
-// lift declares right after the binding. A function declaration keeps its
+// lift declares right after the wrapper. A function declaration keeps its
 // wrapper, since a `const` can't run before its own line.
 //
 // The result, at cf984a9: 2,450 of the 2,498 lifted functions were rebound.
@@ -21,7 +21,7 @@ import * as tsParser from "@typescript-eslint/parser";
 
 const HELPER = "bindHermetic";
 
-/** Rebinds every binding in `code` that has the lift's shape; returns the new code and how many it rebound. */
+/** Rebinds every wrapper in `code` that has the lift's shape; returns the new code and how many it rebound. */
 export function rebind(code, filename) {
   if (code.includes(HELPER)) return { code, rebound: 0 };
   const typescript = /\.[cm]?tsx?$/.test(filename);
@@ -60,7 +60,7 @@ export function rebind(code, filename) {
     if (context?.type === "ObjectExpression") {
       contextText = code.slice(context.range[0], context.range[1]);
     } else if (context?.type === "Identifier" && contexts.get(context.name)?.index === index + 1) {
-      // The binding now reads its context when it is declared, so the context moves in front of it.
+      // The rebound wrapper now reads its context when it is declared, so the context moves in front of it.
       const moved = contexts.get(context.name).statement;
       contextText = context.name;
       const before = leadingStart(statement, ast.comments, code);

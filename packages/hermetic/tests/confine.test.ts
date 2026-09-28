@@ -4,7 +4,7 @@
 import "ses";
 import { parse } from "acorn";
 import { beforeAll, describe, expect, it } from "vitest";
-import { type CheckContext, checkHermetic, confine, HermeticError, intrinsics } from "../src/index.ts";
+import { type CheckEnvironment, checkHermetic, confine, HermeticError, intrinsics } from "../src/index.ts";
 
 function thrown(run: () => unknown): HermeticError {
   try {
@@ -55,10 +55,10 @@ describe("after lockdown()", () => {
 
   it("confines the checker itself, which gets nothing but the parser it is handed", () => {
     const confined = confine(checkHermetic);
-    const context: CheckContext = {
+    const env: CheckEnvironment = {
       parse: (source, sourceType) => parse(source, { ecmaVersion: "latest", sourceType, checkPrivateFields: false }),
     };
-    expect(confined.call(context, "(a) => a + b")).toMatchObject({
+    expect(confined.call(env, "(a) => a + b")).toMatchObject({
       hermetic: false,
       problems: [{ kind: "freeVariable", name: "b" }],
     });
@@ -120,7 +120,7 @@ describe("after lockdown()", () => {
     });
   });
 
-  it("leaves a member out when the binding leaves it out", () => {
+  it("leaves a member out when the environment leaves it out", () => {
     const random = confine<(this: { Math: Omit<Math, "random"> }) => number>(
       'function () { "use hermetic"; return this.Math.random() }',
     );

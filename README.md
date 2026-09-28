@@ -34,19 +34,19 @@ What you get:
 
 ## Terms
 
-- **Inputs**: a function's arguments, including `this`. `this` is an implicit first argument: `.call` passes it explicitly, and `.bind` fixes it in advance.
-- **Hidden input**: a value a function reads that isn't one of its inputs, such as an import, a module-level variable or a global, built-ins included. `hermetic/sealed` reports hidden inputs in hermetic functions.
-- **Environment**: an object that the code binding hermetic functions passes in as `this`. Only the root environment is built from the runtime's globals; the others are built from it, adding and replacing values. Each is frozen, so no function can change what another gets. [Passing things in](packages/hermetic/README.md#passing-things-in) covers the pattern.
-- **Lift**: the `lift` fix of `hermetic/prefer-hermetic`. It moves a function's body into a new hermetic function that receives the function's hidden inputs through `this`, and turns the original function into a wrapper.
-- **Wrapper**: the original function after a lift. It keeps its name, signature and export, and calls the hermetic function with the values it needs.
-- **Settled**: a module-level name that is initialized before a wrapper can run, and never reassigned. A wrapper passes settled values directly, and everything else through a shared context object.
-- **Unlift**: the exact inverse of the lift. It turns each wrapper back into the original function. `unliftPlugin` does it in production builds.
+[VOCABULARY.md](VOCABULARY.md) gives each word this project uses one meaning. The ones this README relies on:
+
+- **Inputs**: a function's arguments, including `this`, which is an implicit first argument: `.call` passes it explicitly, and `.bind` fixes it in advance.
+- **Hidden input**: anything else a function reads, such as an import, a module-level variable or a global, built-ins included. `hermetic/no-hidden-inputs` reports the hidden inputs of code marked hermetic.
+- **Binding code**: code that isn't hermetic, and supplies the inputs of code that is, like the `.bind` call above. Every class is binding code for its methods.
+- **Environment**: the object binding code passes as `this`. [Passing things in](packages/hermetic/README.md#passing-things-in) covers building them.
+- **Lift**: the `lift` fix of `hermetic/prefer-hermetic`. It moves a function's body into a new hermetic function, the *core*, which receives the function's hidden inputs through `this`, and turns the original function into a *wrapper* that calls it. The **unlift** is its exact inverse, and `unliftPlugin` runs it in builds.
 
 ## Two packages
 
 | Package | What it does |
 | --- | --- |
-| [`@bombadil/eslint-plugin-hermetic`](packages/eslint-plugin-hermetic) | ESLint rules. `hermetic/sealed` checks the functions you mark as hermetic, and `hermetic/prefer-hermetic` finds functions that already are, and rewrites others so they can be. |
+| [`@bombadil/eslint-plugin-hermetic`](packages/eslint-plugin-hermetic) | ESLint rules. `hermetic/no-hidden-inputs` checks the functions you mark as hermetic, and `hermetic/prefer-hermetic` finds functions that already are, and rewrites others so they can be. |
 | [`@bombadil/hermetic`](packages/hermetic) | The same check at runtime, with no ESLint. `check` reads a function's source and reports what it reads besides its inputs, `confine` runs a hermetic function in a [Hardened JS](https://hardenedjs.org/) compartment, and `intrinsics` picks the deterministic built-ins out of the runtime, to pass in. `inject`, if you want it, binds a function to exactly the names it reads. `record` and `replay` turn a real call into a test, `doctests` runs the examples in a function's JSDoc, and `methods` builds a class out of hermetic functions. |
 
 The plugin lints in your editor and CI:
@@ -75,7 +75,7 @@ const fn = confine(source); // throws a HermeticError unless it is hermetic
 fn.call(harden(intrinsics(globalThis)), input); // the built-ins it uses come in through this
 ```
 
-`check` reports what `hermetic/sealed` reports. On the 14,416 functions and methods, and the 371 classes, in the published JavaScript of Effect, RxJS and TanStack Query, the two report the same problems at the same places, every one.
+`check` reports what `hermetic/no-hidden-inputs` reports. On the 14,416 functions and methods, and the 371 classes, in the published JavaScript of Effect, RxJS and TanStack Query, the two report the same problems at the same places, every one.
 
 Up to 0.2.0, `@bombadil/hermetic` was the ESLint plugin. From 0.3.0, its rules are in `@bombadil/eslint-plugin-hermetic`, hermetic functions read no globals, so the `ground` and `aliasing` settings are gone, and a hermetic method can't use its class's private names.
 
@@ -118,7 +118,7 @@ The repository is an npm workspace with the two packages under [`packages/`](pac
 
 `npm run corpus -- effect` also lifts Effect's own source in a checkout of its repository and runs its test suite on the result; add `--unlift` to lift and then unlift it first. `npm run corpus -- bench` times Effect workloads on its original, lifted and unlifted source, and on a second copy of the original that shows the noise. Both need git and pnpm.
 
-`npm run corpus -- crosscheck` checks every function in the packages' published JavaScript with both `hermetic/sealed` and `check`, and compares what they report. `npm run corpus -- report` gathers all of it into `site/data/corpus.json`, and `npm run site` builds the [site](https://bombadil-labs.github.io/hermetic/) from that into `_site/`; every number on its pages comes from the report. `npm run corpus -- records` writes what happened to every function in the corpus to `.corpus/results/records.json`, for looking one up.
+`npm run corpus -- crosscheck` checks every function in the packages' published JavaScript with both `hermetic/no-hidden-inputs` and `check`, and compares what they report. `npm run corpus -- report` gathers all of it into `site/data/corpus.json`, and `npm run site` builds the [site](https://bombadil-labs.github.io/hermetic/) from that into `_site/`; every number on its pages comes from the report. `npm run corpus -- records` writes what happened to every function in the corpus to `.corpus/results/records.json`, for looking one up.
 
 Both packages are released together, at one version, from GitHub releases. [RELEASING.md](RELEASING.md) covers the one-time setup and each release.
 

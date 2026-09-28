@@ -8,11 +8,11 @@ type SourceCode = TSESLint.SourceCode;
 type Variable = TSESLint.Scope.Variable;
 
 export interface UnliftResult {
-  /** The module with every recognized binding folded back into its function. */
+  /** The module with every recognized wrapper folded back into its function. */
   readonly code: string;
-  /** The bindings folded back, by name. */
+  /** The wrappers folded back, by name. */
   readonly unlifted: readonly string[];
-  /** Bindings that forward to a core but were left alone, and why. */
+  /** Wrappers that forward to a core but were left alone, and why. */
   readonly skipped: readonly { readonly name: string; readonly line: number; readonly reason: string }[];
   /** With `sourceMap`, a source map from `code` back to the module it was given. */
   readonly map?: SourceMap;
@@ -25,12 +25,12 @@ export interface UnliftOptions {
 
 /**
  * The inverse of `prefer-hermetic`'s lift, for builds that want hermetic
- * source without its cost at run time. A binding that forwards to a hermetic
+ * source without its cost at run time. A wrapper that forwards to a hermetic
  * core becomes the function it came from again: the core's parameters and
  * body move back into it, each `this.name` reads `name`, and the core and its
  * context are removed.
  *
- * It applies only where that is exact: the core is used by the binding alone,
+ * It applies only where that is exact: the core is used by the wrapper alone,
  * reads `this` only through the names its context provides, and none of them
  * is shadowed where it is read. Everything else is left as it is and listed in
  * `skipped`. The result is no longer hermetic, so it carries no directive.
@@ -41,14 +41,14 @@ export function unlift(code: string, filename = "module.ts", options: UnliftOpti
   const unlifted: string[] = [];
   const skipped: { name: string; line: number; reason: string }[] = [];
   for (const statement of sourceCode.ast.body) {
-    const binding = functionOf(statement);
-    const forwarding = binding && forwardingCall(binding);
-    if (!binding || !forwarding) continue;
-    const name = bindingName(binding);
-    const plan = planUnlift(binding, forwarding.call, forwarding.core, sourceCode);
+    const wrapper = functionOf(statement);
+    const forwarding = wrapper && forwardingCall(wrapper);
+    if (!wrapper || !forwarding) continue;
+    const name = wrapperName(wrapper);
+    const plan = planUnlift(wrapper, forwarding.call, forwarding.core, sourceCode);
     if (plan === undefined) continue;
     if (typeof plan === "string") {
-      skipped.push({ name, line: binding.loc.start.line, reason: plan });
+      skipped.push({ name, line: wrapper.loc.start.line, reason: plan });
       continue;
     }
     edits.push(...plan);
@@ -95,7 +95,7 @@ function functionOf(statement: TSESTree.ProgramStatement): FunctionNode | undefi
   return init?.type === AST_NODE_TYPES.ArrowFunctionExpression || init?.type === AST_NODE_TYPES.FunctionExpression ? init : undefined;
 }
 
-function bindingName(fn: FunctionNode): string {
+function wrapperName(fn: FunctionNode): string {
   if (fn.id) return fn.id.name;
   return fn.parent.type === AST_NODE_TYPES.VariableDeclarator && fn.parent.id.type === AST_NODE_TYPES.Identifier
     ? fn.parent.id.name
@@ -127,7 +127,7 @@ function forwardingCall(fn: FunctionNode): { call: TSESTree.CallExpression; core
 
 /** What `this.name` stands for in the core. */
 interface Entry {
-  /** The binding the context reads, or undefined for an undeclared global. */
+  /** The variable the context reads, or undefined for an undeclared global. */
   readonly variable: Variable | undefined;
   /** The name it is read by. */
   readonly name: string;
@@ -136,12 +136,12 @@ interface Entry {
 }
 
 /**
- * The edits that fold the binding back, or why it cannot be. Undefined when
- * the function is not a binding at all: its callee is not a hermetic function
+ * The edits that fold the wrapper back, or why it cannot be. Undefined when
+ * the function is not a wrapper at all: its callee is not a hermetic function
  * declared in this module.
  */
 function planUnlift(
-  binding: FunctionNode,
+  wrapper: FunctionNode,
   call: TSESTree.CallExpression,
   callee: TSESTree.Identifier,
   sourceCode: SourceCode,
@@ -157,9 +157,9 @@ function planUnlift(
       ? "the core is exported"
       : "the core is not declared at the top of the module";
   }
-  if (binding.async || binding.generator) return "the binding is itself async or a generator";
+  if (wrapper.async || wrapper.generator) return "the wrapper is itself async or a generator";
   if (coreVariable?.references.some((reference) => reference.identifier !== callee)) return "the core is used elsewhere";
-  if (binding.type === AST_NODE_TYPES.ArrowFunctionExpression && core.generator) return "an arrow cannot be a generator";
+  if (wrapper.type === AST_NODE_TYPES.ArrowFunctionExpression && core.generator) return "an arrow cannot be a generator";
 
   const [contextArgument, ...forwarded] = call.arguments;
   const context = readContext(contextArgument, sourceCode);
@@ -171,7 +171,7 @@ function planUnlift(
   const edits: Edit[] = [];
   const problem = substituteThis(core, context.entries, sourceCode, edits);
   if (problem) return problem;
-  const mismatch = matchParameters(binding, coreParams, forwarded, sourceCode, edits);
+  const mismatch = matchParameters(wrapper, coreParams, forwarded, sourceCode, edits);
   if (mismatch) return mismatch;
 
   // The directive goes, with the whitespace the lift put before it.
@@ -185,8 +185,8 @@ function planUnlift(
 
   const text = sourceCode.text;
   const raw = (node: TSESTree.Node | undefined | null): Mapped => (node ? Mapped.copy(text, node.range) : Mapped.empty);
-  // A named parameter reads as the binding still spells it, without annotations the lift added to the core.
-  const restored = binding.params.flatMap((param, index) => {
+  // A named parameter reads as the wrapper still spells it, without annotations the lift added to the core.
+  const restored = wrapper.params.flatMap((param, index) => {
     const coreParam = coreParams[index];
     const named =
       param.type === AST_NODE_TYPES.Identifier ||
@@ -200,8 +200,8 @@ function planUnlift(
   });
   const within = (edit: Edit) => restored.some(({ range }) => edit.range[0] >= range[0] && edit.range[1] <= range[1]);
   const params = compose(text, parameterSpan(core, sourceCode), [...edits.filter((edit) => !within(edit)), ...restored]);
-  // New text in the function stands for the start of the binding it replaces.
-  const at = mappedAt(binding.range[0]);
+  // New text in the function stands for the start of the wrapper it replaces.
+  const at = mappedAt(wrapper.range[0]);
   const signature = at`${raw(core.typeParameters)}(${params})${raw(core.returnType)}`;
   const block = compose(text, core.body.range, edits);
   // Comments the lift carried between the signature and the body. An arrow takes them after `=>`,
@@ -211,10 +211,10 @@ function planUnlift(
   const loose = looseComments(core, copied, sourceCode);
   const notes = Mapped.place(renderComments(loose, sourceCode, indentOf(sourceCode, core)), loose[0]?.range[0] ?? core.range[0]);
   let replacement: Mapped;
-  if (binding.type === AST_NODE_TYPES.ArrowFunctionExpression) {
+  if (wrapper.type === AST_NODE_TYPES.ArrowFunctionExpression) {
     replacement = at`${core.async ? "async " : ""}${signature} => ${notes}${conciseBody(core, sourceCode, edits) ?? block}`;
   } else {
-    const name = binding.type === AST_NODE_TYPES.FunctionDeclaration ? ` ${binding.id?.name ?? ""}` : " ";
+    const name = wrapper.type === AST_NODE_TYPES.FunctionDeclaration ? ` ${wrapper.id?.name ?? ""}` : " ";
     replacement = at`${core.async ? "async " : ""}function${core.generator ? "*" : ""}${name}${signature} ${notes}${block}`;
   }
 
@@ -223,7 +223,7 @@ function planUnlift(
     const before = sourceCode.getTokenBefore(statement, { includeComments: true });
     return [{ range: [before ? before.range[1] : 0, statement.range[1]] as const, text: "" }];
   });
-  return [{ range: binding.range, text: replacement }, ...removals];
+  return [{ range: wrapper.range, text: replacement }, ...removals];
 }
 
 /**
@@ -257,7 +257,7 @@ function readContext(
         return "the context literal holds something other than names";
       }
       const variable = resolve(property.value);
-      if (variable === "local") return "the context reads a parameter or local of the binding";
+      if (variable === "local") return "the context reads a parameter or local of the wrapper";
       entries.set(property.key.name, { variable, name: property.value.name, writable: false });
     }
     return { entries };
@@ -298,7 +298,7 @@ function readContext(
     const written = setters.get(key);
     if (target === "local") return `the context's getter for '${key}' reads a local`;
     if (written && (written.name !== read.name || resolve(written) !== target)) {
-      return `the context's getter and setter for '${key}' reach different bindings`;
+      return `the context's getter and setter for '${key}' reach different variables`;
     }
     entries.set(key, { variable: target, name: read.name, writable: written !== undefined });
   }
@@ -371,7 +371,7 @@ function setterWrite(fn: TSESTree.FunctionExpression): TSESTree.Identifier | und
 /**
  * Rewrites each `this.name` the core reads as the name itself. Every `this`
  * that belongs to the core must be such a read, of a name the context provides,
- * and must resolve to the same binding once `this.` is gone.
+ * and must resolve to the same variable once `this.` is gone.
  */
 function substituteThis(
   core: TSESTree.FunctionDeclaration,
@@ -382,7 +382,7 @@ function substituteThis(
   const coreScope = sourceCode.scopeManager?.acquire(core);
   const moduleScope = coreScope?.upper;
   if (!coreScope || !moduleScope) return "the core has no scope";
-  // The binding forwards only its declared parameters, so the core's `arguments` may hold fewer.
+  // The wrapper forwards only its declared parameters, so the core's `arguments` may hold fewer.
   if ((coreScope.set.get("arguments")?.references.length ?? 0) > 0) return "the core uses arguments";
   let problem: string | undefined;
   const visit = (node: TSESTree.Node): void => {
@@ -442,13 +442,13 @@ function substituteSite(
   if (write === "delete") return `the core deletes 'this.${key}'`;
   if (write && !entry.writable) return `the core assigns 'this.${key}', which its context cannot write`;
 
-  // The name must reach the same binding from here as the context's accessor did.
+  // The name must reach the same variable from here as the context's accessor did.
   for (let scope: TSESLint.Scope.Scope | null = sourceCode.getScope(member); scope && scope !== moduleScope; scope = scope.upper) {
-    if (scope.set.get(entry.name)?.isValueVariable) return `a local '${entry.name}' in the core shadows the binding`;
+    if (scope.set.get(entry.name)?.isValueVariable) return `a local '${entry.name}' in the core shadows the variable the context read`;
     if (scope === coreScope) break;
   }
   if ((ASTUtils.findVariable(moduleScope, entry.name) ?? undefined) !== entry.variable) {
-    return `'${entry.name}' in the core would reach a different binding`;
+    return `'${entry.name}' in the core would reach a different variable`;
   }
 
   // The lift calls a global the original called bare as `(0, this.name)(…)`; fold it back to `name(…)`.
@@ -525,24 +525,24 @@ function writeKind(member: TSESTree.MemberExpression): "write" | "delete" | unde
 }
 
 /**
- * Checks that the binding forwards exactly its parameters, and that each
+ * Checks that the wrapper forwards exactly its parameters, and that each
  * matches the core's: the same name, or the lift's stand-in for a pattern,
  * with the same default. Defaults are compared as the core's text reads once
  * `this.` is gone.
  */
 function matchParameters(
-  binding: FunctionNode,
+  wrapper: FunctionNode,
   coreParams: readonly TSESTree.Parameter[],
   forwarded: readonly TSESTree.CallExpressionArgument[],
   sourceCode: SourceCode,
   edits: readonly Edit[],
 ): string | undefined {
-  const mismatch = "the binding's parameters do not match the core's";
-  if (binding.params.length !== coreParams.length || forwarded.length !== binding.params.length) return mismatch;
+  const mismatch = "the wrapper's parameters do not match the core's";
+  if (wrapper.params.length !== coreParams.length || forwarded.length !== wrapper.params.length) return mismatch;
   const text = sourceCode.text;
-  const sameDefault = (bindingDefault: TSESTree.Expression, coreDefault: TSESTree.Expression): boolean =>
-    text.slice(bindingDefault.range[0], bindingDefault.range[1]) === compose(text, coreDefault.range, edits).text;
-  for (const [index, param] of binding.params.entries()) {
+  const sameDefault = (wrapperDefault: TSESTree.Expression, coreDefault: TSESTree.Expression): boolean =>
+    text.slice(wrapperDefault.range[0], wrapperDefault.range[1]) === compose(text, coreDefault.range, edits).text;
+  for (const [index, param] of wrapper.params.entries()) {
     const core = coreParams[index];
     const argument = forwarded[index];
     if (!core || !argument) return mismatch;

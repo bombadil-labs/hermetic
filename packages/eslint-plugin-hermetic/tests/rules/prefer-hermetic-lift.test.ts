@@ -102,7 +102,7 @@ export const where = () => new Error(String(R)).stack;`,
       options: [{ lift: true, types: "structural-only" }],
     },
     {
-      name: "a hand-written binding with a plain context object",
+      name: "a hand-written wrapper with a plain context object",
       code: [
         `const R = 1;`,
         `function f(a: number) {`,
@@ -116,7 +116,7 @@ export const where = () => new Error(String(R)).stack;`,
       options: lift,
     },
     {
-      name: "an already generated binding",
+      name: "an already generated wrapper",
       code: [
         `const R = 1;`,
         `function f(a: number) {`,
@@ -205,7 +205,7 @@ export const where = () => new Error(String(R)).stack;`,
       errors: [{ messageId: "liftable", data: { fn: "next", names: "STEP" } }],
     },
     {
-      name: "a binding that can run before what it reads gets one shared context of getters",
+      name: "a wrapper that can run before what it reads gets one shared context of getters",
       code: `export const total = (n: number) => n * RATE;\nconst RATE = 1.2;`,
       output: [
         `export const total = (n: number) => totalHermetic.call(totalContext, n);`,
@@ -256,7 +256,7 @@ export const where = () => new Error(String(R)).stack;`,
       errors: [{ messageId: "liftable", data: { fn: "f", names: "R" } }],
     },
     {
-      name: "a comment that continues past the binding's line stays a comment",
+      name: "a comment that continues past the wrapper's line stays a comment",
       code: `export const f = () => R; /* a note\nthat continues */\nconst R = 1;`,
       output: [
         `export const f = () => fHermetic.call(fContext);`,
@@ -276,7 +276,7 @@ export const where = () => new Error(String(R)).stack;`,
       errors: [{ messageId: "liftable", data: { fn: "f", names: "R" } }],
     },
     {
-      name: "a parameter list on several lines keeps its layout in the binding, trailing comma included",
+      name: "a parameter list on several lines keeps its layout in the wrapper, trailing comma included",
       code: [`const STEP = 2;`, `export const scale = (`, `  value: number,`, `  factor: number,`, `): number => value * factor * STEP;`].join("\n"),
       output: [
         `const STEP = 2;`,
@@ -344,7 +344,7 @@ export const where = () => new Error(String(R)).stack;`,
       errors: [{ messageId: "liftable", data: { fn: "bump", names: "count" } }],
     },
     {
-      name: "generated names avoid existing bindings",
+      name: "generated names avoid existing names",
       code: `const fHermetic = 0;\nconst fContext = 0;\nconst f = () => fHermetic + fContext + R;\nconst R = 1;`,
       output: [
         `const fHermetic = 0;`,
@@ -378,7 +378,7 @@ function fix(code: string): { output: string; remaining: Linter.LintMessage[] } 
         files: ["**/*.ts"],
         languageOptions: { parser: tsParser as Linter.Parser },
         plugins: { hermetic: plugin },
-        rules: { "hermetic/prefer-hermetic": ["error", { lift: true }], "hermetic/sealed": "error" },
+        rules: { "hermetic/prefer-hermetic": ["error", { lift: true }], "hermetic/no-hidden-inputs": "error" },
       },
     ],
     { filename: "module.ts" },
@@ -386,7 +386,7 @@ function fix(code: string): { output: string; remaining: Linter.LintMessage[] } 
   return { output: result.output, remaining: result.messages };
 }
 
-/** Runs a TypeScript module body in strict mode, as a module would, and returns the named bindings. */
+/** Runs a TypeScript module body in strict mode, as a module would, and returns what it declares, by name. */
 function run(code: string, names: readonly string[]): Record<string, unknown> {
   const js = ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   return new Function(`"use strict";\n${js}\nreturn { ${names.join(", ")} };`)() as Record<string, unknown>;
@@ -437,12 +437,12 @@ describe("lift semantics", () => {
       probe: "probe",
     },
     {
-      name: "a binding called during setup, before a constant it reads on another path",
+      name: "a wrapper called during setup, before a constant it reads on another path",
       code: `const pick = (late: boolean) => (late ? LATER : 0);\nconst early = pick(false);\nconst LATER = 1;\nconst probe = () => [early, pick(true)];`,
       probe: "probe",
     },
     {
-      name: "a binding called later on its own line finds its context",
+      name: "a wrapper called later on its own line finds its context",
       code: `let R = 1;\nconst f = () => R + 1; const early = f();\nconst probe = () => [early, f()];`,
       probe: "probe",
     },
@@ -512,7 +512,7 @@ describe("lift semantics", () => {
     it(`preserves behavior: ${name}`, () => {
       const { output, remaining } = fix(code);
       expect(output, "the fix should change something").not.toBe(code);
-      expect(remaining, "every core should pass sealed, and nothing should be left to lift").toEqual([]);
+      expect(remaining, "every core should pass no-hidden-inputs, and nothing should be left to lift").toEqual([]);
       const before = run(code, [probe]);
       const after = run(output, [probe]);
       expect((after[probe] as () => unknown)()).toEqual((before[probe] as () => unknown)());

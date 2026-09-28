@@ -97,7 +97,7 @@ describe("unlift undoes the lift exactly", () => {
       `  b: number,`,
       `) => a * b * R;`,
     ].join("\n"),
-    "code sharing the binding's line": [
+    "code sharing the wrapper's line": [
       `export const f = () => R + 1; const early = f; /* a note`,
       `that continues */`,
       `export const g = () => R; // trailing`,
@@ -167,7 +167,7 @@ describe("unlift undoes the lift exactly", () => {
   });
 });
 
-describe("unlift leaves bindings it cannot undo exactly", () => {
+describe("unlift leaves wrappers it cannot undo exactly", () => {
   const core = (body: string, params = "") => `function fHermetic(this: { R: typeof R }${params}) {\n  "use hermetic";\n  ${body}\n}`;
   const cases: { name: string; code: string; reason: string }[] = [
     {
@@ -208,22 +208,22 @@ describe("unlift leaves bindings it cannot undo exactly", () => {
     {
       name: "a local that would capture the name",
       code: `const R = 1;\nexport const f = () => fHermetic.call({ R });\n${core("{ const R = 2; return this.R + R; }")}`,
-      reason: "a local 'R' in the core shadows the binding",
+      reason: "a local 'R' in the core shadows the variable the context read",
     },
     {
       name: "defaults that differ",
       code: `const R = 1;\nexport const f = (x = 1) => fHermetic.call({ R }, x);\n${core("return this.R + x;", ", x = 2")}`,
-      reason: "the binding's parameters do not match the core's",
+      reason: "the wrapper's parameters do not match the core's",
     },
     {
-      name: "a write through a direct context, which never reached the binding",
+      name: "a write through a direct context, which never reached the variable",
       code: `let R = 1;\nexport const f = () => fHermetic.call({ R });\n${core("this.R = 2; return this.R;")}`,
       reason: "the core assigns 'this.R', which its context cannot write",
     },
     {
-      name: "a context that reads a parameter of the binding",
+      name: "a context that reads a parameter of the wrapper",
       code: `export const f = (R: number) => fHermetic.call({ R }, R);\n${core("return this.R + x;", ", x: number")}`,
-      reason: "the context reads a parameter or local of the binding",
+      reason: "the context reads a parameter or local of the wrapper",
     },
   ];
 

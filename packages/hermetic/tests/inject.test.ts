@@ -34,7 +34,7 @@ describe("inject", () => {
     expect(read).toEqual(["clamp", "rate"]);
   });
 
-  it("gives the function a frozen environment, so it can't change what another binding gets", () => {
+  it("gives the function a frozen environment, so it can't change what another function gets", () => {
     function bump(this: { count: number }): number {
       "use hermetic";
       this.count = this.count + 1;

@@ -38,8 +38,8 @@
             <p>
               Every value a function reads is one of its inputs, whether or not it appears in the parameter list. A function
               that reads a module-level variable or calls <code>fetch</code> has inputs its signature doesn't show. The
-              <code>hermetic/sealed</code> rule reports every such input in a hermetic function: an import, a module-level
-              variable, a global like <code>fetch</code>, or a built-in like <code>Math</code>.
+              <code>hermetic/no-hidden-inputs</code> rule reports every such input in a hermetic function: an import, a
+              module-level variable, a global like <code>fetch</code>, or a built-in like <code>Math</code>.
             </p>
             <p>
               Built-ins are inputs too: which ones exist, and what they do, depends on the runtime and on any code that
@@ -140,7 +140,8 @@ export const applyPricing = applyDiscount.bind(pricing);</pre>
             <p>
               On the {{crosscheck.functions}} functions and methods, and the {{crosscheck.classes}} classes, in the published
               JavaScript of Effect, RxJS and TanStack Query, <code>check</code> reports exactly what
-              <code>hermetic/sealed</code> reports, at the same places, every one. So lint functions where they are written, and check them where they arrive.
+              <code>hermetic/no-hidden-inputs</code> reports, at the same places, every one. So lint functions where they
+              are written, and check them where they arrive.
             </p>
             <p>
               The checker is hermetic itself. Its parser comes in through <code>this</code>, and it reads no globals, so its
@@ -258,12 +259,12 @@ export default defineConfig({ plugins: [unliftPlugin()] });</pre>
             <h2>Documentation</h2>
             <p>
               hermetic is under development, and version 0.3.0 isn't released yet. A function is marked hermetic with a
-              <code>"use hermetic"</code> directive or an <code>@hermetic</code> JSDoc tag, and <code>hermetic/sealed</code>
-              checks only the functions that are marked.
+              <code>"use hermetic"</code> directive or an <code>@hermetic</code> JSDoc tag, and
+              <code>hermetic/no-hidden-inputs</code> checks only the functions that are marked.
             </p>
             <p>
               The documentation is on GitHub:
-              <a href="https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/sealed.md">hermetic/sealed</a>,
+              <a href="https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/no-hidden-inputs.md">hermetic/no-hidden-inputs</a>,
               <a href="https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/prefer-hermetic.md">hermetic/prefer-hermetic</a>,
               <a href="https://github.com/bombadil-labs/hermetic/tree/main/packages/eslint-plugin-hermetic#built-ins-come-in-through-this">passing built-ins in</a>,
               and <a href="https://github.com/bombadil-labs/hermetic/tree/main/packages/hermetic#readme">check and confine</a>.

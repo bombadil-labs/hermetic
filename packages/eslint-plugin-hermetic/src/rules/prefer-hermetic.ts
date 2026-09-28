@@ -1,6 +1,6 @@
 import { AST_NODE_TYPES, AST_TOKEN_TYPES, type TSESLint, type TSESTree } from "@typescript-eslint/utils";
-import { analyze, createEnvironment, type HermeticSettings, SETTINGS_SCHEMA } from "../analysis.ts";
-import { isBinding, liftFix, planLift } from "../lift.ts";
+import { analyze, createAnalysis, type HermeticSettings, SETTINGS_SCHEMA } from "../analysis.ts";
+import { isWrapper, liftFix, planLift } from "../lift.ts";
 import {
   constructedClass,
   directiveInsertion,
@@ -10,7 +10,7 @@ import {
   isMarkedHermetic,
   isMethod,
 } from "../marking.ts";
-import { createRule } from "./sealed.ts";
+import { createRule } from "./create-rule.ts";
 
 export interface PreferHermeticOptions extends HermeticSettings {
   /**
@@ -61,14 +61,14 @@ export const preferHermetic = createRule<[PreferHermeticOptions], MessageIds>({
     },
   },
   create(context, [options]) {
-    const env = createEnvironment(context, options);
+    const analysis = createAnalysis(context, options);
     const sourceCode = context.sourceCode;
     const typescript = /\.[cm]?tsx?$/.test(context.filename);
     return {
       ":function"(node: FunctionNode) {
         if (!isCandidate(node) || isMarkedHermetic(node, sourceCode)) return;
         const name = functionName(node);
-        const problems = analyze(node, name, env);
+        const problems = analyze(node, name, analysis);
         if (problems.length === 0) {
           context.report({
             node: nameNode(node),
@@ -79,8 +79,8 @@ export const preferHermetic = createRule<[PreferHermeticOptions], MessageIds>({
           return;
         }
         // The lift splits functions; a method's `this` is taken by its object, so it has nowhere to put what it lifts yet.
-        if (!options.lift || isMethod(node) || isBinding(node, sourceCode)) return;
-        const plan = planLift(node, problems, env, { importsSettled: options.importsSettled === true });
+        if (!options.lift || isMethod(node) || isWrapper(node, sourceCode)) return;
+        const plan = planLift(node, problems, analysis, { importsSettled: options.importsSettled === true });
         if (!plan) return;
         const names = [...plan.lifted.keys()];
         context.report({
@@ -95,7 +95,7 @@ export const preferHermetic = createRule<[PreferHermeticOptions], MessageIds>({
 });
 
 /**
- * Outermost functions bound to a name: declarations, variable initializers,
+ * Outermost functions that have a name: declarations, variable initializers,
  * functions stored in object properties, and methods. Callbacks passed as
  * arguments and IIFEs are ignored; marking them would be noise. So are
  * constructors: marking one marks its whole class.

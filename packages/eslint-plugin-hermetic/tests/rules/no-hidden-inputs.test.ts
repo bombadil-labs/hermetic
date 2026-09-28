@@ -1,5 +1,5 @@
 import { RuleTester } from "@typescript-eslint/rule-tester";
-import { sealed, type MessageIds } from "../../src/rules/sealed.ts";
+import { type MessageIds, noHiddenInputs } from "../../src/rules/no-hidden-inputs.ts";
 
 const ruleTester = new RuleTester();
 
@@ -9,7 +9,7 @@ const free = (name: string, fn = "f"): ErrorSpec => ({ messageId: "freeVariable"
 const escape = (messageId: MessageIds, fn = "f"): ErrorSpec => ({ messageId, data: { fn } });
 const privateName = (name: string, fn: string): ErrorSpec => ({ messageId: "privateName", data: { name, fn } });
 
-ruleTester.run("spec: valid cases", sealed, {
+ruleTester.run("spec: valid cases", noHiddenInputs, {
   valid: [
     { name: "arguments only", code: `function f(a) { "use hermetic"; return a.x + 1; }` },
     { name: "this in a declaration", code: `function f() { "use hermetic"; return this.rate; }` },
@@ -72,7 +72,7 @@ ruleTester.run("spec: valid cases", sealed, {
   ],
 });
 
-ruleTester.run("marking", sealed, {
+ruleTester.run("marking", noHiddenInputs, {
   valid: [
     { name: "unmarked functions are not checked", code: `const R = 1; function f() { return R; }` },
     {
@@ -175,7 +175,7 @@ ruleTester.run("marking", sealed, {
   ],
 });
 
-ruleTester.run("free variables", sealed, {
+ruleTester.run("free variables", noHiddenInputs, {
   valid: [
     { name: "own arguments", code: `function f() { "use hermetic"; return arguments.length; }` },
     { name: "this in a nested arrow", code: `function f() { "use hermetic"; return [1].map(() => this.k); }` },
@@ -256,7 +256,7 @@ ruleTester.run("free variables", sealed, {
       errors: [free("leaked")],
     },
     {
-      name: "a module binding named like a global",
+      name: "a module-level variable named like a global",
       code: `const Math = { max: () => 0 }; function f(a, b) { "use hermetic"; return Math.max(a, b); }`,
       errors: [free("Math")],
     },
@@ -303,7 +303,7 @@ ruleTester.run("free variables", sealed, {
   ],
 });
 
-ruleTester.run("nested hermetic functions", sealed, {
+ruleTester.run("nested hermetic functions", noHiddenInputs, {
   valid: [],
   invalid: [
     {
@@ -324,7 +324,7 @@ ruleTester.run("nested hermetic functions", sealed, {
   ],
 });
 
-ruleTester.run("syntactic escapes", sealed, {
+ruleTester.run("syntactic escapes", noHiddenInputs, {
   valid: [
     { name: "new.target in a class field", code: `const f = () => { "use hermetic"; return class { x = new.target; }; };` },
     {
@@ -405,7 +405,7 @@ ruleTester.run("syntactic escapes", sealed, {
   ],
 });
 
-ruleTester.run("types", sealed, {
+ruleTester.run("types", noHiddenInputs, {
   valid: [
     {
       name: "typeof in a type position is erased",
@@ -479,7 +479,7 @@ ruleTester.run("types", sealed, {
   ],
 });
 
-ruleTester.run("hermetic methods", sealed, {
+ruleTester.run("hermetic methods", noHiddenInputs, {
   valid: [
     { name: "a method reads its object", code: `class Rect { area() { "use hermetic"; return this.width * this.height; } }` },
     { name: "a getter", code: `class Rect { get area() { "use hermetic"; return this.width * this.height; } }` },
@@ -519,7 +519,7 @@ ruleTester.run("hermetic methods", sealed, {
   ],
 });
 
-ruleTester.run("hermetic classes", sealed, {
+ruleTester.run("hermetic classes", noHiddenInputs, {
   valid: [
     {
       name: "a class whose constructor is marked, with private names it declares and its own name",

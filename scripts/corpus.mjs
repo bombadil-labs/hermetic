@@ -5,9 +5,9 @@
 //   npm run corpus               census, stress, fix and roundtrip
 //   npm run corpus -- census     which functions are hermetic, liftable, or need a person
 //   npm run corpus -- stress     every function analyzed as if marked; nothing may throw
-//   npm run corpus -- fix        `prefer-hermetic --fix` with lift: parses, sealed, settled, no new type errors
+//   npm run corpus -- fix        `prefer-hermetic --fix` with lift: parses, no hidden inputs, settled, no new type errors
 //   npm run corpus -- roundtrip  unlifting the lifted corpus gives back the marked corpus
-//   npm run corpus -- crosscheck every function in the published JavaScript, checked by sealed and by
+//   npm run corpus -- crosscheck every function in the published JavaScript, checked by no-hidden-inputs and by
 //                                check() from its source text alone; the two must find the same problems
 //   npm run corpus -- effect     lifts Effect's own source and runs its test suite (needs git and pnpm);
 //                                with --unlift, lifts and then unlifts it first
@@ -41,7 +41,7 @@ import { fileURLToPath } from "node:url";
 import * as tsParser from "@typescript-eslint/parser";
 import { Linter } from "eslint";
 import ts from "typescript";
-import { analyze, createEnvironment, isAmbient } from "../packages/eslint-plugin-hermetic/src/analysis.ts";
+import { analyze, createAnalysis, isAmbient } from "../packages/eslint-plugin-hermetic/src/analysis.ts";
 import plugin from "../packages/eslint-plugin-hermetic/src/index.ts";
 import { planLift, tryLift } from "../packages/eslint-plugin-hermetic/src/lift.ts";
 import { unlift } from "../packages/eslint-plugin-hermetic/src/unlift.ts";
@@ -174,12 +174,12 @@ function runStress() {
         everything: {
           meta: { schema: [], messages: { problem: "problem" } },
           create(context) {
-            const env = createEnvironment(context, options);
+            const analysis = createAnalysis(context, options);
             return {
               ":function"(node) {
                 try {
-                  const problems = analyze(node, functionName(node), env);
-                  planLift(node, problems, env);
+                  const problems = analyze(node, functionName(node), analysis);
+                  planLift(node, problems, analysis);
                 } catch (error) {
                   crashes.push(`${path.relative(original, context.filename)}:${node.loc.start.line} ${error.message}`);
                 }
@@ -197,14 +197,14 @@ function runStress() {
   }
 }
 
-/** What sealed calls each construct it reports, as check() names it. */
+/** What no-hidden-inputs calls each construct it reports, as check() names it. */
 const CONSTRUCTS = { lexicalThis: "this", superReference: "super", lexicalNewTarget: "new.target", importMeta: "import.meta", dynamicImport: "import()" };
 
 /**
  * Checks every function, method and class in the published JavaScript twice:
- * with sealed, as if it were marked, and with check() on the text
+ * with no-hidden-inputs, as if it were marked, and with check() on the text
  * Function.prototype.toString gives for it. Both must report the same
- * problems at the same places, except where sealed sees the module around the
+ * problems at the same places, except where the rule sees the module around the
  * function and check() by design cannot: a function declaration whose own
  * name the module reassigns. A method's `this` is its object, and a class is
  * checked whole, as marking its constructor marks it.
@@ -218,13 +218,13 @@ function runCrosscheck() {
       compare: {
         meta: { schema: [], messages: { x: "x" } },
         create(context) {
-          const env = createEnvironment(context, {});
+          const analysis = createAnalysis(context, {});
           const text = context.sourceCode.text;
           const file = path.relative(path.join(root, "published"), context.filename).split(path.sep).join("/");
-          /** Compares what sealed finds in `node` with what check() finds in `source`, which starts at `start`. */
+          /** Compares what the rule finds in `node` with what check() finds in `source`, which starts at `start`. */
           const compare = (node, name, start, source, counts) => {
             const at = (node, from = start) => `@${node.range[0] - from}-${node.range[1] - from}`;
-            const expected = analyze(node, name, env).map((problem) => ({
+            const expected = analyze(node, name, analysis).map((problem) => ({
                 kind: problem.messageId,
                 key: `${problem.messageId}:${problem.data.name ?? problem.data.path ?? CONSTRUCTS[problem.messageId]}${at(problem.node)}`,
                 reference: problem.reference,
@@ -243,7 +243,7 @@ function runCrosscheck() {
               for (const { kind } of expected) tally.agreed[kind] = (tally.agreed[kind] ?? 0) + 1;
               return;
             }
-            const record = { file, line: node.loc.start.line, name, sealedOnly: extra, checkOnly: missing, source: source.length > 400 ? `${source.slice(0, 400)}...` : source };
+            const record = { file, line: node.loc.start.line, name, ruleOnly: extra, checkOnly: missing, source: source.length > 400 ? `${source.slice(0, 400)}...` : source };
             // A problem only the module can show: a declaration's own name read as a free variable, because the module reassigns it.
             const seesModule = (problem) =>
               problem.kind === "freeVariable" && node.type === "FunctionDeclaration" && problem.reference.resolved?.defs.some((def) => def.node === node);
@@ -302,12 +302,12 @@ function runCrosscheck() {
   row("hermetic, by both", tally.hermetic);
   row("  of them methods", tally.methodsHermetic);
   row("the same problems at the same places", tally.same);
-  row("differ only where sealed sees the module: a declaration whose own name the module reassigns", moduleOnly.length);
+  row("differ only where the rule sees the module: a declaration whose own name the module reassigns", moduleOnly.length);
   row("differ otherwise", differing.length);
   console.log(`  (and ${tally.constructors} class constructors, whose source is their whole class)`);
   console.log(`  Classes, checked whole: ${tally.classes}, hermetic by both: ${tally.classesHermetic}`);
   console.log(`  Problems both found: ${Object.entries(tally.agreed).sort((a, b) => b[1] - a[1]).map(([kind, n]) => `${n} ${kind}`).join(", ")}`);
-  for (const record of differing.slice(0, 10)) console.log(`\n  ${record.file}:${record.line} ${record.name ?? ""}\n    sealed only: ${record.sealedOnly?.join(", ") || "-"}\n    check only:  ${record.checkOnly?.join(", ") || record.fatal || "-"}`);
+  for (const record of differing.slice(0, 10)) console.log(`\n  ${record.file}:${record.line} ${record.name ?? ""}\n    rule only:   ${record.ruleOnly?.join(", ") || "-"}\n    check only:  ${record.checkOnly?.join(", ") || record.fatal || "-"}`);
   fs.mkdirSync(resultsDir, { recursive: true });
   const result = { date: new Date().toISOString(), ...provenance(), node: process.version, packages: PACKAGES, published: PUBLISHED, ...tally, moduleOnly, differing };
   fs.writeFileSync(path.join(resultsDir, "crosscheck.json"), `${JSON.stringify(result, null, 1)}\n`);
@@ -355,9 +355,9 @@ function introducedTypeErrors(dir) {
 
 /** Applies `prefer-hermetic --fix` with lift to every source file under `dir`, in place. */
 function fixInPlace(dir) {
-  const rules = { "hermetic/prefer-hermetic": ["error", { lift: true }], "hermetic/sealed": "error" };
+  const rules = { "hermetic/prefer-hermetic": ["error", { lift: true }], "hermetic/no-hidden-inputs": "error" };
   const linter = new Linter({ cwd: dir });
-  const counts = { changed: 0, unparsable: 0, unsealed: 0, unsettled: 0, files: [] };
+  const counts = { changed: 0, unparsable: 0, hiddenInputs: 0, unsettled: 0, files: [] };
   for (const file of sourceFiles(dir)) {
     const code = fs.readFileSync(file, "utf8");
     const first = linter.verifyAndFix(code, config(rules), { filename: file });
@@ -367,13 +367,13 @@ function fixInPlace(dir) {
       file: path.relative(dir, file),
       changed: first.output !== code,
       unparsable: first.messages.filter((m) => m.fatal).length,
-      unsealed: first.messages.filter((m) => m.ruleId === "hermetic/sealed").length,
+      hiddenInputs: first.messages.filter((m) => m.ruleId === "hermetic/no-hidden-inputs").length,
       unsettled: second.output !== first.output,
     };
     counts.files.push(result);
     if (result.changed) counts.changed++;
     counts.unparsable += result.unparsable;
-    counts.unsealed += result.unsealed;
+    counts.hiddenInputs += result.hiddenInputs;
     if (result.unsettled) counts.unsettled++;
   }
   return counts;
@@ -384,10 +384,10 @@ function runFix() {
   fs.cpSync(original, fixedDir, { recursive: true });
   const started = performance.now();
   const fixed = fixInPlace(fixedDir);
-  const { changed, unparsable, unsealed, unsettled } = fixed;
+  const { changed, unparsable, hiddenInputs, unsettled } = fixed;
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
   console.log(`\nFix: ${changed} files changed in ${seconds}s`);
-  console.log(`  ${unparsable} parse errors, ${unsealed} sealed errors, ${unsettled} files a second pass would change`);
+  console.log(`  ${unparsable} parse errors, ${hiddenInputs} hidden-input errors, ${unsettled} files a second pass would change`);
 
   console.log("Type checking the original and fixed trees...");
   const { before, after, introduced } = introducedTypeErrors(fixedDir);
@@ -437,7 +437,7 @@ function runRoundtrip() {
   }
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
   console.log(`\nRound trip: ${files} files with lifts, ${cores} cores, ${folded} folded back in ${seconds}s`);
-  console.log(`  ${skipped.length} bindings skipped, ${mismatches.length} files that differ from the marked original`);
+  console.log(`  ${skipped.length} wrappers skipped, ${mismatches.length} files that differ from the marked original`);
   for (const line of [...skipped, ...mismatches].slice(0, 20)) console.log(`  ${line.slice(0, 400)}`);
   console.log("Type checking the round-tripped tree...");
   const { introduced } = introducedTypeErrors(roundtripDir);
@@ -587,12 +587,12 @@ function unliftInPlace(dir) {
 function runEffect(options) {
   const checkout = effectCheckout();
   const src = path.join(checkout, "packages/effect/src");
-  const { changed, unparsable, unsealed, unsettled } = fixInPlace(src);
+  const { changed, unparsable, hiddenInputs, unsettled } = fixInPlace(src);
   const lifted = sourceFiles(src)
     .map((file) => unlift(fs.readFileSync(file, "utf8"), file).unlifted.length)
     .reduce((a, b) => a + b, 0);
   console.log(`\nEffect: ${changed} files changed, ${lifted} functions lifted`);
-  console.log(`  ${unparsable} parse errors, ${unsealed} sealed errors, ${unsettled} files a second pass would change`);
+  console.log(`  ${unparsable} parse errors, ${hiddenInputs} hidden-input errors, ${unsettled} files a second pass would change`);
   if (options.bind) console.log(`  ${rebindInPlace(src)} rebound as bound functions`);
   if (options.unlift) {
     const { folded, skipped } = unliftInPlace(src);
@@ -685,14 +685,14 @@ function runBench(options = {}) {
   fixInPlace(path.join(benchDir, "lifted"));
   if (options.bind) {
     fixInPlace(path.join(benchDir, "bound"));
-    console.log(`\nBenchmark: ${rebindInPlace(path.join(benchDir, "bound"))} bindings rebound in the bound copy`);
+    console.log(`\nBenchmark: ${rebindInPlace(path.join(benchDir, "bound"))} wrappers rebound in the bound copy`);
   } else if (options.literal) {
     fixInPlace(path.join(benchDir, "literal"));
     console.log(`\nBenchmark: ${literalContextsInPlace(path.join(benchDir, "literal"))} shared contexts written as object literals in the literal copy`);
   } else {
     fixInPlace(path.join(benchDir, "unlifted"));
     const { folded, skipped } = unliftInPlace(path.join(benchDir, "unlifted"));
-    console.log(`\nBenchmark: ${folded} bindings folded back in the unlifted copy, ${skipped.length} skipped`);
+    console.log(`\nBenchmark: ${folded} wrappers folded back in the unlifted copy, ${skipped.length} skipped`);
   }
   fs.writeFileSync(path.join(benchDir, "run.ts"), BENCHMARK);
   const best = {};
@@ -777,7 +777,7 @@ const libraryOf = (file) => LIBRARIES.find((library) => library.sources.some((so
  * through a shared context, or skipped and why. A skipped declaration also
  * records the kinds of names it reads, and whether it would lift if imports
  * counted as settled. A shared lift records whether it is shared only
- * because it reads a global. An outermost function bound to no name, such
+ * because it reads a global. An outermost function with no name, such
  * as a callback passed to another function, is not a candidate; it is
  * recorded as unnamed, with the function it is passed to. A method is a
  * candidate for marking but not for the lift, which has nowhere to put what it
@@ -810,7 +810,7 @@ function censusRecords() {
       records: {
         meta: { schema: [], messages: { x: "x" } },
         create(context) {
-          const env = createEnvironment(context, {});
+          const analysis = createAnalysis(context, {});
           const file = path.relative(original, context.filename).split(path.sep).join("/");
           return {
             // An outermost class, which is hermetic if everything in it is, as marking it would check.
@@ -819,7 +819,7 @@ function censusRecords() {
               for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) {
                 if (isFunctionNode(ancestor) || ancestor.type === "ClassDeclaration" || ancestor.type === "ClassExpression") return;
               }
-              const hermetic = analyze(node, className(node), env).length === 0;
+              const hermetic = analyze(node, className(node), analysis).length === 0;
               records.push({ file, name: className(node), line: node.loc.start.line, outcome: "class", hermetic });
             },
             ":function"(node) {
@@ -832,7 +832,7 @@ function censusRecords() {
                 return void records.push({ file, line: node.loc.start.line, outcome: "unnamed", passedTo });
               }
               if (isMarkedHermetic(node, context.sourceCode)) return;
-              const problems = analyze(node, functionName(node), env);
+              const problems = analyze(node, functionName(node), analysis);
               const method = isMethod(node);
               const member = node.parent.type === "Property" && !method;
               const record = { file, name: functionName(node), line: node.loc.start.line, member, ...(method && { method }) };
@@ -846,7 +846,7 @@ function censusRecords() {
                 }
                 return void records.push({ ...record, outcome: "method", blockers });
               }
-              const result = tryLift(node, problems, env);
+              const result = tryLift(node, problems, analysis);
               if (typeof result !== "string") {
                 if (!result.contextName) return void records.push({ ...record, outcome: "direct" });
                 // A global can be missing or replaced, so it is never passed directly: is that the only reason for the shared context?
@@ -857,7 +857,7 @@ function censusRecords() {
               const kinds = new Map(problems.map((problem) => [problem.reference.identifier.name, kindOf(problem.reference)]));
               const reads = {};
               for (const kind of kinds.values()) reads[kind] = (reads[kind] ?? 0) + 1;
-              const onlyImports = typeof tryLift(node, problems, env, { importsSettled: true }) !== "string";
+              const onlyImports = typeof tryLift(node, problems, analysis, { importsSettled: true }) !== "string";
               records.push({ ...record, outcome: "skipped", reason: result, reads, onlyImports });
             },
           };
@@ -969,7 +969,7 @@ function runReport() {
       validation: {
         filesChanged: fixedFiles.filter((f) => f.changed).length,
         parseErrors: fixedFiles.reduce((sum, f) => sum + f.unparsable, 0),
-        sealedErrors: fixedFiles.reduce((sum, f) => sum + f.unsealed, 0),
+        hiddenInputErrors: fixedFiles.reduce((sum, f) => sum + f.hiddenInputs, 0),
         unsettledFiles: fixedFiles.filter((f) => f.unsettled).length,
         typeErrorsIntroduced: typeErrors(fixed.introduced),
         folded: roundFiles.reduce((sum, f) => sum + f.folded, 0),
@@ -993,7 +993,7 @@ function runReport() {
       hermetic: crosscheck.hermetic,
       same: crosscheck.same,
       agreed: crosscheck.agreed,
-      moduleOnly: crosscheck.moduleOnly.map(({ file, line, name, sealedOnly }) => ({ file, line, name, reported: sealedOnly })),
+      moduleOnly: crosscheck.moduleOnly.map(({ file, line, name, ruleOnly }) => ({ file, line, name, reported: ruleOnly })),
       differing: crosscheck.differing.length,
     },
     effect: { tag: EFFECT.tag, lifted: readResult("effect-lifted"), unlifted: readResult("effect-unlifted"), bench: readResult("bench") },
@@ -1004,7 +1004,7 @@ function runReport() {
   for (const library of libraries) {
     console.log(`  ${library.name}: ${library.candidates} candidates, ${library.hermetic} hermetic, ${library.direct + library.shared} lifted, ${library.skipped} skipped`);
   }
-  console.log(`  Crosscheck: ${crosscheck.functions} functions, ${crosscheck.moduleOnly.length} differing only where sealed sees the module, ${crosscheck.differing.length} differing otherwise`);
+  console.log(`  Crosscheck: ${crosscheck.functions} functions, ${crosscheck.moduleOnly.length} differing only where the rule sees the module, ${crosscheck.differing.length} differing otherwise`);
   const runs = { lifted: "effect", unlifted: "effect --unlift", bench: "bench" };
   for (const [key, command] of Object.entries(runs)) {
     const result = data.effect[key];

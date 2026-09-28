@@ -1,12 +1,12 @@
 import { AST_NODE_TYPES, AST_TOKEN_TYPES, ASTUtils, type TSESLint, type TSESTree } from "@typescript-eslint/utils";
 import { applyEdits, arrowToken, childNodes, type Edit, LINE_BREAK, looseComments, parameterSpan, renderComments } from "./ast.ts";
-import { type Environment, isAmbient, isTypeOnly, type MessageIds, type Problem } from "./analysis.ts";
+import { type Analysis, isAmbient, isTypeOnly, type MessageIds, type Problem } from "./analysis.ts";
 import { directiveInsertion, type FunctionNode, isFunctionNode, isMarkedHermetic, isMethod } from "./marking.ts";
 
 type Reference = TSESLint.Scope.Reference;
 type SourceCode = Readonly<TSESLint.SourceCode>;
 
-/** Problems a lift can resolve: references to module bindings and globals. */
+/** Problems a lift can resolve: references to module-level names and globals. */
 const LIFTABLE: ReadonlySet<MessageIds> = new Set(["freeVariable"]);
 
 /**
@@ -25,7 +25,7 @@ const ECMASCRIPT_FUNCTIONS: ReadonlySet<string> = new Set([
   "Uint16Array", "Uint32Array", "Uint8Array", "Uint8ClampedArray", "unescape", "URIError", "WeakMap", "WeakRef", "WeakSet",
 ]);
 
-/** A binding the lift moves into the function's context. */
+/** A name the lift moves into the function's context. */
 interface Lifted {
   readonly name: string;
   readonly global: boolean;
@@ -35,7 +35,7 @@ interface Lifted {
   guarded: boolean;
   /**
    * Always initialized and never reassigned whenever the function can run, so
-   * the binding can pass the value itself instead of a getter.
+   * the wrapper can pass the value itself instead of a getter.
    */
   direct: boolean;
   /**
@@ -55,8 +55,8 @@ export interface LiftPlan {
   readonly lifted: ReadonlyMap<string, Lifted>;
   readonly identifiers: readonly TSESTree.Identifier[];
   /**
-   * The shared context the binding passes, declared once right after it, when
-   * some lifted binding must be read through a getter. Undefined when every
+   * The shared context the wrapper passes, declared once right after it, when
+   * some lifted name must be read through a getter. Undefined when every
    * value can be passed directly, in a fresh object literal.
    */
   readonly contextName?: string;
@@ -92,24 +92,24 @@ export type LiftBlocker =
   | "another escape";
 
 /**
- * Decides whether `fn` can be split into a hermetic core and a binding without
+ * Decides whether `fn` can be split into a hermetic core and a wrapper without
  * changing behavior, and what moves into the context. Returns undefined when a
  * person should decide; `tryLift` says why.
  */
 export function planLift(
   fn: FunctionNode,
   problems: readonly Problem[],
-  env: Environment,
+  analysis: Analysis,
   assumptions: LiftAssumptions = {},
 ): LiftPlan | undefined {
-  const result = tryLift(fn, problems, env, assumptions);
+  const result = tryLift(fn, problems, analysis, assumptions);
   return typeof result === "string" ? undefined : result;
 }
 
 /** What `tryLift` may assume beyond what the lift does. */
 export interface LiftAssumptions {
   /**
-   * Imported bindings are initialized before any function that reads them
+   * Imported names are initialized before any function that reads them
    * runs, and do not change while it runs. An import cycle breaks the first
    * and an exported `let` the second, so the lift assumes it only when
    * `prefer-hermetic`'s `importsSettled` option says so.
@@ -121,27 +121,27 @@ export interface LiftAssumptions {
 export function tryLift(
   fn: FunctionNode,
   problems: readonly Problem[],
-  env: Environment,
+  analysis: Analysis,
   assumptions: LiftAssumptions = {},
 ): LiftPlan | LiftBlocker {
-  if (env.structuralOnly) return "structural-only types";
+  if (analysis.structuralOnly) return "structural-only types";
   const site = liftSite(fn);
   if (typeof site === "string") return site;
-  if (usesOwnReceiver(fn, env)) return "uses its own this, arguments or new.target";
-  if (suppressesTypeErrors(fn, env)) return "suppresses type errors";
+  if (usesOwnReceiver(fn, analysis)) return "uses its own this, arguments or new.target";
+  if (suppressesTypeErrors(fn, analysis)) return "suppresses type errors";
   if (defaultReadsPattern(fn)) return "a default reads a destructured parameter";
-  if (defaultMayRunTwice(fn, env)) return "a default calls a function";
+  if (defaultMayRunTwice(fn, analysis)) return "a default calls a function";
   if (!forwardsRestExactly(fn)) return "a generic rest parameter";
-  if (remapsKeysInline(fn, env)) return "an inline key-remapped mapped type";
-  if (inspectsStack(fn, env)) return "reads the stack";
+  if (remapsKeysInline(fn, analysis)) return "an inline key-remapped mapped type";
+  if (inspectsStack(fn, analysis)) return "reads the stack";
 
   const references: Reference[] = [];
   for (const problem of problems) {
     if (!problem.reference || !LIFTABLE.has(problem.messageId)) return PROBLEM_BLOCKERS[problem.messageId] ?? "another escape";
     references.push(problem.reference);
   }
-  // Once the body moves into the core, a declaration's calls to itself must go through the public binding.
-  const scope = env.sourceCode.scopeManager?.acquire(fn);
+  // Once the body moves into the core, a declaration's calls to itself must go through the wrapper, which keeps its name.
+  const scope = analysis.sourceCode.scopeManager?.acquire(fn);
   if (fn.type === AST_NODE_TYPES.FunctionDeclaration) {
     for (const reference of scope?.through ?? []) {
       if (!isTypeOnly(reference, fn) && reference.resolved?.defs.some((def) => def.node === fn)) {
@@ -170,14 +170,14 @@ export function tryLift(
   const direct = [...lifted.values()].every((entry) => entry.direct);
   // A function declaration can run before any statement of its module, a shared context's included.
   if (!direct && site.hoisted) return "a declaration that reads unsettled names";
-  const coreName = freshName(`${site.name}Hermetic`, env, fn);
-  const contextName = direct ? undefined : freshName(`${site.name}Context`, env, fn);
+  const coreName = freshName(`${site.name}Hermetic`, analysis, fn);
+  const contextName = direct ? undefined : freshName(`${site.name}Context`, analysis, fn);
   return { fn, coreName, statement: site.statement, lifted, identifiers, contextName };
 }
 
 interface LiftSite {
   readonly name: string;
-  /** The top-level statement that declares the binding. */
+  /** The top-level statement that declares the function, which becomes the wrapper. */
   readonly statement: TSESTree.Node;
   /** A function declaration, callable before any statement of its module has run. */
   readonly hoisted: boolean;
@@ -236,15 +236,15 @@ const PROBLEM_BLOCKERS: Partial<Record<MessageIds, LiftBlocker>> = {
 };
 
 /** `@ts-expect-error` and `@ts-ignore` target lines that move; the author should decide. */
-function suppressesTypeErrors(fn: FunctionNode, env: Environment): boolean {
-  return env.sourceCode
+function suppressesTypeErrors(fn: FunctionNode, analysis: Analysis): boolean {
+  return analysis.sourceCode
     .getCommentsInside(fn)
     .some((comment) => /@ts-(?:expect-error|ignore|nocheck)\b/.test(comment.value));
 }
 
 /**
- * The binding keeps each default value, so it may not read a name that only a
- * destructured parameter before it binds: the binding forwards that parameter whole.
+ * The wrapper keeps each default value, so it may not read a name that only a
+ * destructured parameter before it declares: the wrapper forwards that parameter whole.
  */
 function defaultReadsPattern(fn: FunctionNode): boolean {
   const seenPattern = fn.params.findIndex(
@@ -257,20 +257,20 @@ function defaultReadsPattern(fn: FunctionNode): boolean {
 }
 
 /**
- * The binding and the core both keep each default. The core's runs again only
- * when the binding's produced `undefined`, which matters only when running it
+ * The wrapper and the core both keep each default. The core's runs again only
+ * when the wrapper's produced `undefined`, which matters only when running it
  * has an effect: a call.
  */
-function defaultMayRunTwice(fn: FunctionNode, env: Environment): boolean {
+function defaultMayRunTwice(fn: FunctionNode, analysis: Analysis): boolean {
   const calls = (node: TSESTree.Node): boolean =>
     node.type === AST_NODE_TYPES.CallExpression ||
     node.type === AST_NODE_TYPES.TaggedTemplateExpression ||
-    (!isFunctionNode(node) && [...childNodes(node, env.sourceCode.visitorKeys)].some(calls));
+    (!isFunctionNode(node) && [...childNodes(node, analysis.sourceCode.visitorKeys)].some(calls));
   return fn.params.some((param) => param.type === AST_NODE_TYPES.AssignmentPattern && calls(param.right));
 }
 
 /**
- * The binding forwards a rest parameter with a spread. TypeScript keeps a
+ * The wrapper forwards a rest parameter with a spread. TypeScript keeps a
  * spread's exact type only for a type parameter, an array or a tuple; it reads
  * `...xs: A & { length: 2 }` as `number[]`, which the core's generic `A` would
  * reject. Without type parameters every rest type is concrete and forwards as is.
@@ -304,9 +304,9 @@ function forwardsRestExactly(fn: FunctionNode): boolean {
  * A mapped type with an `as` clause, written into the signature itself.
  * TypeScript relates two generic ones only when they come from the same
  * declaration, and the core repeats the signature: its copy would never match
- * the binding's. A named alias is shared by both, so it is fine.
+ * the wrapper's. A named alias is shared by both, so it is fine.
  */
-function remapsKeysInline(fn: FunctionNode, env: Environment): boolean {
+function remapsKeysInline(fn: FunctionNode, analysis: Analysis): boolean {
   let found = false;
   const visit = (node: TSESTree.Node): void => {
     if (found) return;
@@ -314,7 +314,7 @@ function remapsKeysInline(fn: FunctionNode, env: Environment): boolean {
       found = true;
       return;
     }
-    for (const child of childNodes(node, env.sourceCode.visitorKeys)) visit(child);
+    for (const child of childNodes(node, analysis.sourceCode.visitorKeys)) visit(child);
   };
   for (const part of [fn.typeParameters, ...fn.params, fn.returnType]) if (part) visit(part);
   return found;
@@ -322,9 +322,9 @@ function remapsKeysInline(fn: FunctionNode, env: Environment): boolean {
 
 /**
  * The split adds a stack frame between the function and its callers, so code
- * that finds a caller by counting frames would find the binding instead.
+ * that finds a caller by counting frames would find the wrapper instead.
  */
-function inspectsStack(fn: FunctionNode, env: Environment): boolean {
+function inspectsStack(fn: FunctionNode, analysis: Analysis): boolean {
   let found = false;
   const visit = (node: TSESTree.Node): void => {
     if (found) return;
@@ -338,7 +338,7 @@ function inspectsStack(fn: FunctionNode, env: Environment): boolean {
       found = true;
       return;
     }
-    for (const child of childNodes(node, env.sourceCode.visitorKeys)) visit(child);
+    for (const child of childNodes(node, analysis.sourceCode.visitorKeys)) visit(child);
   };
   visit(fn.body);
   return found;
@@ -348,9 +348,9 @@ function inspectsStack(fn: FunctionNode, env: Environment): boolean {
  * The core runs with the context as `this`, so a function that reads its own
  * `this`, `arguments` or `new.target` would change behavior.
  */
-function usesOwnReceiver(fn: FunctionNode, env: Environment): boolean {
+function usesOwnReceiver(fn: FunctionNode, analysis: Analysis): boolean {
   if (fn.type === AST_NODE_TYPES.ArrowFunctionExpression) return false;
-  const scope = env.sourceCode.scopeManager?.acquire(fn, true);
+  const scope = analysis.sourceCode.scopeManager?.acquire(fn, true);
   if ((scope?.set.get("arguments")?.references.length ?? 0) > 0) return true;
   let found = false;
   const visit = (node: TSESTree.Node): void => {
@@ -361,7 +361,7 @@ function usesOwnReceiver(fn: FunctionNode, env: Environment): boolean {
       found = true;
       return;
     }
-    for (const child of childNodes(node, env.sourceCode.visitorKeys)) visit(child);
+    for (const child of childNodes(node, analysis.sourceCode.visitorKeys)) visit(child);
   };
   visit(fn.body);
   return found;
@@ -429,9 +429,9 @@ function classify(reference: Reference, site: LiftSite, assumptions: LiftAssumpt
 }
 
 /**
- * True when `variable` holds its final value whenever the binding can run.
+ * True when `variable` holds its final value whenever the wrapper can run.
  * Function declarations and namespace imports exist before any code runs, and
- * a binding that does not hoist runs only after its own statement, so a
+ * a wrapper that does not hoist runs only after its own statement, so a
  * declaration that finishes before that statement has run by then. Named
  * imports are live and may not be initialized yet in an import cycle.
  */
@@ -509,13 +509,13 @@ function isReassignable(variable: TSESLint.Scope.Variable): boolean {
 }
 
 /** A name not yet bound in the module, nor used as a global anywhere in it. */
-function freshName(base: string, env: Environment, fn: FunctionNode): string {
+function freshName(base: string, analysis: Analysis, fn: FunctionNode): string {
   const taken = new Set<string>();
-  for (let scope = env.sourceCode.scopeManager?.acquire(fn) ?? null; scope; scope = scope.upper) {
+  for (let scope = analysis.sourceCode.scopeManager?.acquire(fn) ?? null; scope; scope = scope.upper) {
     for (const name of scope.set.keys()) taken.add(name);
     for (const reference of scope.through) taken.add(reference.identifier.name);
   }
-  for (const scope of env.sourceCode.scopeManager?.scopes ?? []) {
+  for (const scope of analysis.sourceCode.scopeManager?.scopes ?? []) {
     if (scope.type === "module" || scope.type === "global") for (const name of scope.set.keys()) taken.add(name);
   }
   if (!taken.has(base)) return base;
@@ -523,11 +523,11 @@ function freshName(base: string, env: Environment, fn: FunctionNode): string {
 }
 
 /**
- * True for a generated binding: its whole body calls a hermetic function
+ * True for a generated wrapper: its whole body calls a hermetic function
  * declared in this module with a context, an object literal or a name.
  * Lifting it again would never settle.
  */
-export function isBinding(fn: FunctionNode, sourceCode: SourceCode): boolean {
+export function isWrapper(fn: FunctionNode, sourceCode: SourceCode): boolean {
   let expression: TSESTree.Node = fn.body;
   if (fn.body.type === AST_NODE_TYPES.BlockStatement) {
     const [only, ...rest] = fn.body.body;
@@ -555,11 +555,11 @@ export function isBinding(fn: FunctionNode, sourceCode: SourceCode): boolean {
 }
 
 /**
- * Splits the function in place: a binding that keeps the name, signature and
+ * Splits the function in place: a wrapper that keeps the name, signature and
  * export, and calls a hermetic core, declared right after, with a context.
  * The context is an object literal of the lifted values when they are all
  * settled, and otherwise one object, created once, whose getters read each
- * lifted binding when the core does. That object is an instance of a class:
+ * lifted name when the core does. That object is an instance of a class:
  * V8 keeps an object literal with getters in dictionary mode, where reading a
  * property costs several times as much.
  */
@@ -613,10 +613,10 @@ export function liftFix(
   const notes = renderComments(looseComments(fn, copied, sourceCode), sourceCode, base);
   const core = `${head}${signature} ${notes}${body}`;
 
-  // The binding: same name, parameters and return type; forwards to the core.
+  // The wrapper: same name, parameters and return type; forwards to the core.
   const forwarded: string[] = [];
   const reserved = new Set([...plan.lifted.keys(), ...fn.params.flatMap((param) => (param.type === AST_NODE_TYPES.Identifier ? [param.name] : []))]);
-  const bindingParams = fn.params.map((param, index) => {
+  const wrapperParams = fn.params.map((param, index) => {
     let generated = `arg${index}`;
     while (reserved.has(generated)) generated = `_${generated}`;
     reserved.add(generated);
@@ -649,13 +649,13 @@ export function liftFix(
   const callee = typeArguments.length > 0 ? `(${plan.coreName}<${typeArguments.join(", ")}>)` : plan.coreName;
   const context = plan.contextName ?? `{ ${lifted.map((entry) => entry.name).join(", ")} }`;
   const call = `${callee}.call(${[context, ...forwarded].join(", ")})`;
-  const bindingSignature = `${raw(fn.typeParameters)}(${layoutParameters(bindingParams, fn, sourceCode)})${raw(fn.returnType)}`;
-  const binding =
+  const wrapperSignature = `${raw(fn.typeParameters)}(${layoutParameters(wrapperParams, fn, sourceCode)})${raw(fn.returnType)}`;
+  const wrapper =
     fn.type === AST_NODE_TYPES.ArrowFunctionExpression
-      ? `${bindingSignature} => ${call}`
-      : `function${fn.type === AST_NODE_TYPES.FunctionDeclaration ? ` ${fn.id?.name ?? ""}` : ""}${bindingSignature} {\n${base}${unit}return ${call};\n${base}}`;
+      ? `${wrapperSignature} => ${call}`
+      : `function${fn.type === AST_NODE_TYPES.FunctionDeclaration ? ` ${fn.id?.name ?? ""}` : ""}${wrapperSignature} {\n${base}${unit}return ${call};\n${base}}`;
 
-  // The shared context comes straight after the binding: nothing can call the binding in between.
+  // The shared context comes straight after the wrapper: nothing can call the wrapper in between.
   const declarations = [core];
   if (plan.contextName) {
     const members = lifted.flatMap((entry) => contextMembers(entry, typescript)).map((line) => `${base}${unit}${line}`);
@@ -663,16 +663,16 @@ export function liftFix(
   }
   const at = declarationSite(plan.statement, sourceCode);
   return [
-    fixer.replaceText(fn, binding),
+    fixer.replaceText(fn, wrapper),
     fixer.insertTextAfterRange([at, at], declarations.map((declaration) => `\n\n${base}${declaration}`).join("")),
   ];
 }
 
 /**
- * Where the context and core go: after the binding's statement and any
+ * Where the context and core go: after the wrapper's statement and any
  * comments that close on its last line, so a trailing comment stays with the
- * binding. When code shares that line, they go right after the statement:
- * nothing may run between the binding and its context.
+ * wrapper. When code shares that line, they go right after the statement:
+ * nothing may run between the wrapper and its context.
  */
 function declarationSite(statement: TSESTree.Node, sourceCode: SourceCode): number {
   const line = statement.loc.end.line;
@@ -693,7 +693,7 @@ function isComment(token: TSESTree.Token): token is TSESTree.Comment {
 }
 
 /**
- * The binding's parameters, laid out like the original list: one per line
+ * The wrapper's parameters, laid out like the original list: one per line
  * when the original put its first parameter on a line of its own, with a
  * trailing comma only if it had one.
  */

@@ -11,7 +11,7 @@ const lint = (settings: Record<string, unknown>) =>
         files: ["**/*.ts"],
         languageOptions: { parser: tsParser as Linter.Parser },
         plugins: { hermetic: plugin },
-        rules: { "hermetic/sealed": "error" },
+        rules: { "hermetic/no-hidden-inputs": "error" },
         settings,
       },
     ],

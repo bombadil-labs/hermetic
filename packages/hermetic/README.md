@@ -4,7 +4,7 @@
 
 - `check` reads a function's source and reports everything it reads besides its inputs, and the names it reads from `this`.
 - `confine` runs a hermetic function in a [Hardened JS](https://hardenedjs.org/) compartment whose global object is empty.
-- `intrinsics` picks the deterministic built-ins out of a realm, for bindings to pass in.
+- `intrinsics` picks the deterministic built-ins out of a realm, for binding code to pass in.
 - `inject`, which is optional and has its own entry point, binds a hermetic function to exactly the names it reads.
 - `methods`, with its own entry point, builds a class out of hermetic functions, installed as its methods.
 - `record` and `replay`, with their own entry point, capture everything a call does with its inputs and play it back as a test.
@@ -59,7 +59,7 @@ The result:
 - **`problems`**: in source order, with offsets into the source.
 - **`needs`**: the names a function or method reads from `this`, whether as `this.clamp` or as `const { clamp } = this`, in the order it first reads them. For a hermetic function, that's everything it needs from the code that binds it. It's undefined when the function uses `this` in a way that doesn't name what it reads, as in `this[key]` or `helper(this)`, and for a class. An arrow function needs nothing, since its `this` isn't one of its inputs.
 
-`check` reports what `hermetic/sealed` reports. On the 14,416 functions and methods, and the 371 classes, in the published JavaScript of Effect 3.22.2, RxJS 7.8.2 and TanStack Query 5.103.2, the two report the same problems at the same places, every one. `npm run corpus -- crosscheck` in the repository reproduces this.
+`check` reports what `hermetic/no-hidden-inputs` reports. On the 14,416 functions and methods, and the 371 classes, in the published JavaScript of Effect 3.22.2, RxJS 7.8.2 and TanStack Query 5.103.2, the two report the same problems at the same places, every one. `npm run corpus -- crosscheck` in the repository reproduces this.
 
 Build tools can change what `check` sees:
 
@@ -93,7 +93,7 @@ const fixed = Object.freeze({ ...local, now: () => 0 });
 
 Two rules keep this sound:
 
-- **Freeze every environment**, or under Hardened JS, `harden` it. A hermetic function may change its inputs, so an environment that several bindings share would otherwise let one function change what another gets. Replacing a value always makes a new environment.
+- **Freeze every environment**, or under Hardened JS, `harden` it. A hermetic function may change its inputs, so an environment bound to several functions would otherwise let one change what another gets. Replacing a value always makes a new environment.
 - **Only the root reads the realm.** Everything else is built from it, so every value a hermetic function gets traces back to one place.
 
 A replaced value is visible where it's bound, and TypeScript checks it against the function's `this` type. Neither the ESLint rules nor `check` need to know what a name means anywhere else, because a hermetic function names nothing outside itself.
@@ -307,7 +307,7 @@ The parser is up to you. It must return an ESTree program whose nodes carry `sta
 
 ```ts
 function check(fn: string | FunctionLike): CheckResult;
-function checkHermetic(this: CheckContext, source: string): CheckResult;
+function checkHermetic(this: CheckEnvironment, source: string): CheckResult;
 function confine<F extends FunctionLike>(fn: string | F): F;
 function intrinsics(realm: typeof globalThis): Intrinsics;
 // From "@bombadil/hermetic/inject":
@@ -351,7 +351,7 @@ interface Problem {
   start: number;
   end: number;
 }
-interface CheckContext {
+interface CheckEnvironment {
   parse: (source: string, sourceType: "module" | "script") => unknown;
 }
 interface Intrinsics {

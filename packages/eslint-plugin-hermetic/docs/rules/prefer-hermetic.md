@@ -2,13 +2,13 @@
 
 Mark functions that are already hermetic, and optionally rewrite others so they are.
 
-`hermetic/sealed` keeps marked functions hermetic. This rule finds the functions to mark. Its fixes are meant to run once over a whole codebase, with `--fix`, and to preserve behavior.
+`hermetic/no-hidden-inputs` keeps marked functions hermetic. This rule finds the functions to mark. Its fixes are meant to run once over a whole codebase, with `--fix`, and to preserve behavior.
 
 ## Rule details
 
-The rule considers the outermost functions bound to a name: function declarations, variable initializers, functions stored in object properties, and methods. Callbacks passed as arguments and IIFEs are ignored, and so are functions that are already marked. So are constructors: marking one marks its whole class, which is for its author to decide.
+The rule considers the outermost functions that have a name: function declarations, variable initializers, functions stored in object properties, and methods. Callbacks passed as arguments and IIFEs are ignored, and so are functions that are already marked. So are constructors: marking one marks its whole class, which is for its author to decide.
 
-- **`alreadyHermetic`**: the function would pass `hermetic/sealed` as it stands. The fix marks it. A block body gets `"use hermetic"` straight after its opening brace, so comments such as `// @ts-expect-error` stay with the statements they precede. An expression-bodied arrow gets an `@hermetic` tag, added to its JSDoc block if it has one.
+- **`alreadyHermetic`**: the function would pass `hermetic/no-hidden-inputs` as it stands. The fix marks it. A block body gets `"use hermetic"` straight after its opening brace, so comments such as `// @ts-expect-error` stay with the statements they precede. An expression-bodied arrow gets an `@hermetic` tag, added to its JSDoc block if it has one.
 - **`liftable`**, with `lift: true`: the function's only hidden inputs are module-level values and globals, built-ins such as `Math` included. The fix moves the body into a new hermetic function that reads them from `this`, and turns the original function into a wrapper that calls it with them.
 
 With `lift: true`, this module:
@@ -91,14 +91,14 @@ export function report(dollars: number) {
 
 `half` was already hermetic, so it is marked. `round`, `toCents` and `discount` are lifted. `round` reads the global `Math`, and a hermetic function reads no globals, so `Math` is passed in like any other hidden input. `report` is skipped, for the reason given under [what the lift skips](#what-the-lift-skips).
 
-### The wrapper and the hermetic function
+### The wrapper and the core
 
-The wrapper keeps the function's name, type parameters, parameters, defaults, return type, export and JSDoc, so callers don't change. The new hermetic function follows it: a function declaration named after it, such as `toCentsHermetic`, with the same body, reading the lifted names from `this`, which a `this` parameter types.
+The wrapper keeps the function's name, type parameters, parameters, defaults, return type, export and JSDoc, so callers don't change. The core, the new hermetic function, follows it: a function declaration named after it, such as `toCentsHermetic`, with the same body, reading the lifted names from `this`, which a `this` parameter types.
 
 The wrapper passes `this` in one of two forms:
 
 - **Directly**, as in `toCents`, when every lifted value is *settled*: initialized whenever the wrapper can run, and never reassigned. Function declarations and namespace imports are always settled, and so are constants and classes declared above a wrapper that isn't hoisted. With the [`importsSettled`](#options) option, named imports count as settled too.
-- **Through a shared context object**, as in `round` and `discount`, otherwise. Globals always go this way, since other code can replace or remove them. The object is created once, right after the wrapper. Its getters read each value when the hermetic function does, and its setters write assignments back. A wrapper that isn't hoisted can't run before its own statement, and the context object's statement comes right after it, so the object always exists when the wrapper runs. The object is an instance of a class, because V8 keeps an object literal with getters in dictionary mode, where each read costs several times as much.
+- **Through a shared context object**, as in `round` and `discount`, otherwise. Globals always go this way, since other code can replace or remove them. The object is created once, right after the wrapper. Its getters read each value when the core does, and its setters write assignments back. A wrapper that isn't hoisted can't run before its own statement, and the context object's statement comes right after it, so the object always exists when the wrapper runs. The object is an instance of a class, because V8 keeps an object literal with getters in dictionary mode, where each read costs several times as much.
 
 A function declaration is hoisted. It can run before any statement of its module, and in an import cycle, before its imports are initialized. So a declaration is only lifted when its values can be passed directly, which for a declaration that reads named imports takes `importsSettled`.
 
@@ -117,23 +117,23 @@ The fix only applies when the rewrite can't change behavior or types. It skips:
 - `this` parameters, `asserts` return types, and `@ts-expect-error`, `@ts-ignore` or `@ts-nocheck` comments, whose target lines would move.
 - Signatures TypeScript can't repeat faithfully: a rest parameter in a generic function typed as anything but a type parameter, an array or a tuple, and a mapped type with an `as` clause written into the signature.
 - Functions that read the stack, through `.stack`, `Error.captureStackTrace`, `Error.prepareStackTrace` or `Error.stackTraceLimit`. The rewrite adds a stack frame.
-- Defaults that read a destructured parameter, and defaults that call a function. The wrapper and the hermetic function both keep each default, and the hermetic function's default runs again whenever the wrapper's produced `undefined`.
+- Defaults that read a destructured parameter, and defaults that call a function. The wrapper and the core both keep each default, and the core's default runs again whenever the wrapper's produced `undefined`.
 - Everything, under `types: "structural-only"`: the generated `this` type refers to module declarations.
 
 ### What changes
 
 - **The stack has one more frame.** Code that finds its caller by counting frames, in the function or anything it calls, sees the wrapper.
-- **`toString()`** of the public function returns the wrapper. The body is in the hermetic function.
-- **The wrapper calls the hermetic function with `.call`**, so the lifted code depends on `Function.prototype.call`, which the original didn't. The lift assumes nothing replaces it. Replacing it would break most JavaScript anyway.
+- **`toString()`** of the public function returns the wrapper. The body is in the core.
+- **The wrapper calls the core with `.call`**, so the lifted code depends on `Function.prototype.call`, which the original didn't. The lift assumes nothing replaces it. Replacing it would break most JavaScript anyway.
 - **Functions called through `this` receive it as their `this`.** The hermetic function calls `this.round(...)` where the original called `round(...)`, so `round` runs with the context object as `this` instead of `undefined`. Functions that ignore `this`, which is nearly all module functions, are unaffected.
 - **A global function called without a receiver is still called without one.** The hermetic function calls `fetch(url)` as `(0, this.fetch)(url)`, so `fetch` still gets `undefined` as its `this`. ECMAScript's own functions ignore their receiver, so `Number(x)` becomes `this.Number(x)`.
-- **Async functions and generators** become plain functions that return the hermetic function's promise or iterator.
+- **Async functions and generators** become plain functions that return the core's promise or iterator.
 - **Each call costs one more call and some property reads.** In microbenchmarks of Effect's hottest paths (collections, the fiber runtime, Schema decoding), the lifted library ran 19 to 45 percent slower. The cost is per call, so it matters where calls are cheap and frequent. [Unlifting](#unlifting-at-build-time) removes it from builds.
 - **Formatting and ordering.** The fix emits plain formatting, so run your formatter afterwards. The wrapper refers to its context object and hermetic function, which are declared after it, and `no-use-before-define` reports that unless its `functions` and `variables` options are off.
 
 ### Why a wrapper, not a bound function
 
-Binding the hermetic function to its context, as `fn.bind({ ... })`, would drop the wrapper's extra call, and needs no restated signature. `npm run corpus -- bind` tries it on the corpus: it rebinds 2,450 of the 2,498 lifted functions. Function declarations keep their wrapper, since a `const` can't run before its own line. Effect's 6,233 tests still pass, but binding recovers little of the cost, and the types don't survive:
+Binding the core to its context, as `fn.bind({ ... })`, would drop the wrapper's extra call, and needs no restated signature. `npm run corpus -- bind` tries it on the corpus: it rebinds 2,450 of the 2,498 lifted functions. Function declarations keep their wrapper, since a `const` can't run before its own line. Effect's 6,233 tests still pass, but binding recovers little of the cost, and the types don't survive:
 
 | Workload | Lifted | Bound | Original again |
 | --- | --- | --- | --- |
@@ -141,13 +141,13 @@ Binding the hermetic function to its context, as `fn.bind({ ... })`, would drop 
 | `Chunk`, `HashMap`, `Option` | +42% | +24% | −9% |
 | `Schema` decoding | +47% | +51% | −5% |
 
-The bound corpus has 904 new type errors: generics that collapse to `unknown`, types inferred in a circle between bindings and the functions they bind, and type predicates and overloads, which TypeScript can't carry through a bound function. So the lift writes a wrapper that restates the signature, and [unlifting](#unlifting-at-build-time) removes the cost instead.
+The bound corpus has 904 new type errors: generics that collapse to `unknown`, types inferred in a circle between the bound functions and their cores, and type predicates and overloads, which TypeScript can't carry through a bound function. So the lift writes a wrapper that restates the signature, and [unlifting](#unlifting-at-build-time) removes the cost instead.
 
 ### Unlifting at build time
 
-The lift has an exact inverse. `unlift` turns each wrapper back into the original function: the hermetic function's parameters and body return to the wrapper, each `this.name` reads `name` again, and the hermetic function and its context object are removed. The result carries no directive, since it is no longer hermetic. The source can stay hermetic, checked and testable, while a build runs the original code, without the costs above.
+The lift has an exact inverse. `unlift` turns each wrapper back into the original function: the core's parameters and body return to the wrapper, each `this.name` reads `name` again, and the core and its context object are removed. The result carries no directive, since it is no longer hermetic. The source can stay hermetic, checked and testable, while a build runs the original code, without the costs above.
 
-It only turns a wrapper back where that is exact: the hermetic function is used by its wrapper alone, reads `this` only through the names its context provides, and none of those names is shadowed where the hermetic function reads it. A hermetic function that tests import, or that someone has edited out of the lift's shape, stays as it is and is reported.
+It only turns a wrapper back where that is exact: the core is used by its wrapper alone, reads `this` only through the names its context provides, and none of those names is shadowed where the core reads it. A core that tests import, or that someone has edited out of the lift's shape, stays as it is and is reported.
 
 On the corpus, unlifting the lifted code gives back the marked original in every file: the same syntax tree once types are erased, with every comment in place, apart from the equivalences the lift cannot record (`=> { return x; }` and `=> x`, `{ x: x }` and `{ x }`, and parenthesization). The round trip adds no type errors. Effect's 6,233 tests pass on its unlifted source, and its benchmarks run within noise of the original. Times are relative to Effect's own source; the last column is a second, untouched copy of it, timed the same way, so it shows the noise:
 
@@ -197,7 +197,7 @@ type Options = {
 
 - **`lift`**: also rewrite functions whose only hidden inputs are module-level values and globals, as described above.
 - **`importsSettled`**: with `lift`, treat named imports as settled: initialized before any function that reads them runs, and unchanged while it runs. Wrappers then pass imports directly, and function declarations that read imports, such as RxJS's operators, can be lifted. Turn it on only if no import cycle can call a function before its imports are initialized, and no exported `let` is reassigned while a function that reads it runs; in those two cases the lifted function reads a value the original wouldn't have. The [RxJS case study](https://bombadil-labs.github.io/hermetic/case-studies/rxjs.html#what-treating-imports-as-initialized-would-change) counts what it changes.
-- **`types`**: the same as for [`hermetic/sealed`](sealed.md#options), so that "already hermetic" means what `sealed` will enforce. Both rules also read it from `settings.hermetic`, which is the simplest way to keep them in step.
+- **`types`**: the same as for [`hermetic/no-hidden-inputs`](no-hidden-inputs.md#options), so that "already hermetic" means what `no-hidden-inputs` will enforce. Both rules also read it from `settings.hermetic`, which is the simplest way to keep them in step.
 
 ## Making a codebase hermetic
 
@@ -205,9 +205,9 @@ type Options = {
 npx eslint --fix --rule '{"hermetic/prefer-hermetic": ["warn", {"lift": true}]}' src/
 ```
 
-Then turn on `hermetic/sealed`, which the recommended config does, so the marked functions stay hermetic.
+Then turn on `hermetic/no-hidden-inputs`, which the recommended config does, so the marked functions stay hermetic.
 
-On a corpus of 3,703 candidate functions from Effect, RxJS and TanStack Query, 15.0% were already hermetic and 67.5% were lifted. The remaining 17.5% were skipped, among them function declarations that read named imports or globals, such as RxJS's operators, and React components. Of the libraries' 1,391 methods, 23.7% were already hermetic, and are marked; the lift doesn't rewrite methods yet. The fixed code parses, passes `hermetic/sealed`, is unchanged by a second `--fix`, and type-checks with no new errors. Effect's own 6,233 tests pass on its lifted source. `npm run corpus` in this repository reproduces these numbers.
+On a corpus of 3,703 candidate functions from Effect, RxJS and TanStack Query, 15.0% were already hermetic and 67.5% were lifted. The remaining 17.5% were skipped, among them function declarations that read named imports or globals, such as RxJS's operators, and React components. Of the libraries' 1,391 methods, 23.7% were already hermetic, and are marked; the lift doesn't rewrite methods yet. The fixed code parses, passes `hermetic/no-hidden-inputs`, is unchanged by a second `--fix`, and type-checks with no new errors. Effect's own 6,233 tests pass on its lifted source. `npm run corpus` in this repository reproduces these numbers.
 
 ## When not to use it
 

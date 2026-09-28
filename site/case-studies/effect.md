@@ -7,7 +7,7 @@ description: What prefer-hermetic did to the source of Effect {{effect.version}}
 
 <p class="lede">Effect is a TypeScript library for writing programs as values, with typed errors, dependency injection, concurrency and streams. This case study runs hermetic on Effect's own source code. Effect is the largest library in the corpus, and the one the lift was tested hardest against: Effect's test suite ran on the lifted source, and again after unlifting it.</p>
 
-The study covers the TypeScript source that Effect {{effect.version}} publishes to npm: {{effect.files}} files and {{effect.candidates}} candidate functions. A candidate is an outermost function that is bound to a name, and isn't a method.
+The study covers the TypeScript source that Effect {{effect.version}} publishes to npm: {{effect.files}} files and {{effect.candidates}} candidate functions. A candidate is an outermost function that has a name, and isn't a method.
 
 That leaves out a large part of Effect. Much of its API is written as `export const map = dual(2, (self, f) => …)`, where the implementation is an unnamed function passed to `dual`. The plugin doesn't consider unnamed functions, so this study leaves out {{effect.unnamed}} of them, {{effect.unnamedDual}} of which are passed to `dual`. Effect's {{effect.methods}} methods, many of them on the prototype objects and classes that Effect builds its data types from, are counted on their own, [below](#methods).
 
@@ -50,13 +50,13 @@ Effect's own modules are inputs too. Hermetic treats every import as a value to 
 
 ## Lifted
 
-Most candidates are module-level functions that call other module-level functions. `Array.ts` calls its own helpers and the `Option` module, and Effect's internal modules call each other. The lift moves each function's body into a new hermetic function that reads those names from `this`. The original function keeps its name, signature and export, and becomes a wrapper that passes the names in. {{effect.direct}} wrappers pass the values directly:
+Most candidates are module-level functions that call other module-level functions. `Array.ts` calls its own helpers and the `Option` module, and Effect's internal modules call each other. The lift moves each function's body into a new hermetic function, the core, which reads those names from `this`. The original function keeps its name, signature and export, and becomes a wrapper that passes the names in. {{effect.direct}} wrappers pass the values directly:
 
 <!-- example effect/src/Option.ts#fromNullable -->
 
 Passing values directly is only safe when every name has been initialized by the time the wrapper can run, and is never reassigned. The lift calls such names *settled*. Here, `none` and `some` are declared above `fromNullable`, and `fromNullable` is a `const`, so it can't run before its own line, and by then both exist.
 
-Names declared further down the file aren't settled. If the function ran before their declarations, the original would only fail if it actually used one of them. To keep that behavior, the wrapper passes a shared context object instead, declared right after it, whose getters read each name only when the hermetic function uses it. {{effect.shared}} lifts in Effect work this way, like `tail`, which uses `tailNonEmpty`, declared twenty lines below it:
+Names declared further down the file aren't settled. If the function ran before their declarations, the original would only fail if it actually used one of them. To keep that behavior, the wrapper passes a shared context object instead, declared right after it, whose getters read each name only when the core uses it. {{effect.shared}} lifts in Effect work this way, like `tail`, which uses `tailNonEmpty`, declared twenty lines below it:
 
 <!-- example effect/src/Array.ts#tail -->
 

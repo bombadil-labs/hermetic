@@ -9,7 +9,7 @@ description: What prefer-hermetic did to the source of Effect {{effect.version}}
 
 The study covers the TypeScript source that Effect {{effect.version}} publishes to npm: {{effect.files}} files and {{effect.candidates}} candidate functions. A candidate is an outermost function that is bound to a name, and isn't a method.
 
-That leaves out a large part of Effect. Much of its API is written as `export const map = dual(2, (self, f) => …)`, where the implementation is an unnamed function passed to `dual`. The plugin doesn't consider unnamed functions, so this study leaves out {{effect.unnamed}} of them, {{effect.unnamedDual}} of which are passed to `dual`. It also leaves out Effect's {{effect.methods}} methods, many of them on the prototype objects and classes that Effect builds its data types from. A method's `this` is its object, not its inputs, so methods can't be hermetic yet.
+That leaves out a large part of Effect. Much of its API is written as `export const map = dual(2, (self, f) => …)`, where the implementation is an unnamed function passed to `dual`. The plugin doesn't consider unnamed functions, so this study leaves out {{effect.unnamed}} of them, {{effect.unnamedDual}} of which are passed to `dual`. Effect's {{effect.methods}} methods, many of them on the prototype objects and classes that Effect builds its data types from, are counted on their own, [below](#methods).
 
 ## How hermetic compares with Effect
 
@@ -78,6 +78,14 @@ Globals aren't settled either. A global can be missing, like `process` outside N
 - **Functions that read the stack** would see an extra stack frame after the rewrite. This rule came from Effect's test suite, as the next section explains:
 
 <!-- example effect/src/internal/context.ts#makeGenericTag -->
+
+## Methods
+
+A method's `this` is the object it's called on, one of its inputs, so a method can be hermetic too. The fix marks the methods that already are, but doesn't lift the others: the lift passes a function's hidden inputs in through `this`, and a method's `this` is its object.
+
+{{effect.hermeticMethods}} of Effect's {{effect.methods}} methods are already hermetic, {{effect.hermeticMethodsPct}}. Most are in the internals of its runtime, such as the PubSub, the supervisors and the fiber runtime, and read nothing but their object and arguments.
+
+Of the other {{effect.otherMethods}}, {{effect.methodsOnlyNames}} read nothing else but module-level names and globals. Most belong to the prototype objects that Effect builds its data types from. `BigDecimal`'s `toString` calls the module's `format`, its `pipe` calls `pipeArguments`, and its `[Hash.symbol]` and `[Equal.symbol]` call the `Hash` module and the module's `equals`. They would be hermetic if the prototype passed those names in, as a lifted function's wrapper does. The lift can't do that for methods yet.
 
 ## What the test suite caught
 

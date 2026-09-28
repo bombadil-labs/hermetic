@@ -128,7 +128,7 @@ The fix only applies when the rewrite can't change behavior or types. It skips:
 - **Functions called through `this` receive it as their `this`.** The hermetic function calls `this.round(...)` where the original called `round(...)`, so `round` runs with the context object as `this` instead of `undefined`. Functions that ignore `this`, which is nearly all module functions, are unaffected.
 - **A global function called without a receiver is still called without one.** The hermetic function calls `fetch(url)` as `(0, this.fetch)(url)`, so `fetch` still gets `undefined` as its `this`. ECMAScript's own functions ignore their receiver, so `Number(x)` becomes `this.Number(x)`.
 - **Async functions and generators** become plain functions that return the hermetic function's promise or iterator.
-- **Each call costs one more call and some property reads.** In microbenchmarks of Effect's hottest paths (collections, the fiber runtime, Schema decoding), the lifted library ran 13 to 54 percent slower. The cost is per call, so it matters where calls are cheap and frequent. [Unlifting](#unlifting-at-build-time) removes it from builds.
+- **Each call costs one more call and some property reads.** In microbenchmarks of Effect's hottest paths (collections, the fiber runtime, Schema decoding), the lifted library ran 19 to 45 percent slower. The cost is per call, so it matters where calls are cheap and frequent. [Unlifting](#unlifting-at-build-time) removes it from builds.
 - **Formatting and ordering.** The fix emits plain formatting, so run your formatter afterwards. The wrapper refers to its context object and hermetic function, which are declared after it, and `no-use-before-define` reports that unless its `functions` and `variables` options are off.
 
 ### Why a wrapper, not a bound function
@@ -153,9 +153,9 @@ On the corpus, unlifting the lifted code gives back the marked original in every
 
 | Workload | Lifted | Unlifted | Original again |
 | --- | --- | --- | --- |
-| `Effect.gen` with `map` and `flatMap` | +13% | 0% | +1% |
-| `Chunk`, `HashMap`, `Option` | +54% | +1% | 0% |
-| `Schema` decoding | +17% | −2% | −3% |
+| `Effect.gen` with `map` and `flatMap` | +21% | +9% | +12% |
+| `Chunk`, `HashMap`, `Option` | +45% | −8% | −4% |
+| `Schema` decoding | +19% | +1% | −1% |
 
 `npm run corpus -- roundtrip`, `npm run corpus -- effect --unlift` and `npm run corpus -- bench` reproduce these, and the [Effect case study](https://bombadil-labs.github.io/hermetic/case-studies/effect.html) has the full story.
 
@@ -207,7 +207,7 @@ npx eslint --fix --rule '{"hermetic/prefer-hermetic": ["warn", {"lift": true}]}'
 
 Then turn on `hermetic/sealed`, which the recommended config does, so the marked functions stay hermetic.
 
-On a corpus of 3,703 candidate functions from Effect, RxJS and TanStack Query, 15.0% were already hermetic and 67.5% were lifted. The remaining 17.5% were skipped, among them function declarations that read named imports or globals, such as RxJS's operators, and React components. Methods aren't candidates, since they can't be hermetic yet. The fixed code parses, passes `hermetic/sealed`, is unchanged by a second `--fix`, and type-checks with no new errors. Effect's own 6,233 tests pass on its lifted source. `npm run corpus` in this repository reproduces these numbers.
+On a corpus of 3,703 candidate functions from Effect, RxJS and TanStack Query, 15.0% were already hermetic and 67.5% were lifted. The remaining 17.5% were skipped, among them function declarations that read named imports or globals, such as RxJS's operators, and React components. Of the libraries' 1,391 methods, 23.7% were already hermetic, and are marked; the lift doesn't rewrite methods yet. The fixed code parses, passes `hermetic/sealed`, is unchanged by a second `--fix`, and type-checks with no new errors. Effect's own 6,233 tests pass on its lifted source. `npm run corpus` in this repository reproduces these numbers.
 
 ## When not to use it
 

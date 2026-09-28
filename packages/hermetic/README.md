@@ -59,7 +59,7 @@ The result:
 - **`problems`**: in source order, with offsets into the source.
 - **`needs`**: the names a function or method reads from `this`, whether as `this.clamp` or as `const { clamp } = this`, in the order it first reads them. For a hermetic function, that's everything it needs from the code that binds it. It's undefined when the function uses `this` in a way that doesn't name what it reads, as in `this[key]` or `helper(this)`, and for a class. An arrow function needs nothing, since its `this` isn't one of its inputs.
 
-`check` reports what `hermetic/sealed` reports. On the 14,416 functions and methods in the published JavaScript of Effect 3.22.2, RxJS 7.8.2 and TanStack Query 5.103.2, the two report the same problems at the same places, every one. (Class constructors aren't counted: a constructor's source is its whole class.) `npm run corpus -- crosscheck` in the repository reproduces this.
+`check` reports what `hermetic/sealed` reports. On the 14,416 functions and methods, and the 371 classes, in the published JavaScript of Effect 3.22.2, RxJS 7.8.2 and TanStack Query 5.103.2, the two report the same problems at the same places, every one. `npm run corpus -- crosscheck` in the repository reproduces this.
 
 Build tools can change what `check` sees:
 

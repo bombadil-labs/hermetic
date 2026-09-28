@@ -75,7 +75,7 @@ const fn = confine(source); // throws a HermeticError unless it is hermetic
 fn.call(harden(intrinsics(globalThis)), input); // the built-ins it uses come in through this
 ```
 
-`check` reports what `hermetic/sealed` reports. On the 14,416 functions and methods in the published JavaScript of Effect, RxJS and TanStack Query, the two report the same problems at the same places, every one.
+`check` reports what `hermetic/sealed` reports. On the 14,416 functions and methods, and the 371 classes, in the published JavaScript of Effect, RxJS and TanStack Query, the two report the same problems at the same places, every one.
 
 Up to 0.2.0, `@bombadil/hermetic` was the ESLint plugin. From 0.3.0, its rules are in `@bombadil/eslint-plugin-hermetic`, hermetic functions read no globals, so the `ground` and `aliasing` settings are gone, and a hermetic method can't use its class's private names.
 

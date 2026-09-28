@@ -1,7 +1,7 @@
 {
   "generated": {
-    "date": "2026-09-26T01:31:35.287Z",
-    "commit": "002b3fb",
+    "date": "2026-09-28T18:31:05.018Z",
+    "commit": "bd7fe96",
     "dirty": false,
     "node": "v22.22.2"
   },
@@ -17,7 +17,18 @@
       ],
       "files": 362,
       "candidates": 3361,
-      "methods": 1273,
+      "methods": 1093,
+      "hermeticMethods": 274,
+      "methodBlockers": {
+        "onlyNames": 807,
+        "onlyModuleNames": 705,
+        "onlyGlobals": 22,
+        "privateName": 1,
+        "superReference": 0,
+        "other": 11
+      },
+      "classes": 292,
+      "hermeticClasses": 14,
       "hermetic": 516,
       "hermeticMembers": 196,
       "direct": 1201,
@@ -76,7 +87,7 @@
         "flatMap": 11
       },
       "validation": {
-        "filesChanged": 228,
+        "filesChanged": 233,
         "parseErrors": 0,
         "sealedErrors": 0,
         "unsettledFiles": 0,
@@ -148,7 +159,18 @@
       ],
       "files": 251,
       "candidates": 251,
-      "methods": 155,
+      "methods": 127,
+      "hermeticMethods": 33,
+      "methodBlockers": {
+        "onlyNames": 74,
+        "onlyModuleNames": 47,
+        "onlyGlobals": 5,
+        "privateName": 0,
+        "superReference": 20,
+        "other": 0
+      },
+      "classes": 33,
+      "hermeticClasses": 2,
       "hermetic": 18,
       "hermeticMembers": 0,
       "direct": 7,
@@ -188,7 +210,7 @@
         "map": 1
       },
       "validation": {
-        "filesChanged": 20,
+        "filesChanged": 35,
         "parseErrors": 0,
         "sealedErrors": 0,
         "unsettledFiles": 0,
@@ -240,7 +262,18 @@
       ],
       "files": 46,
       "candidates": 91,
-      "methods": 184,
+      "methods": 171,
+      "hermeticMethods": 23,
+      "methodBlockers": {
+        "onlyNames": 21,
+        "onlyModuleNames": 16,
+        "onlyGlobals": 2,
+        "privateName": 122,
+        "superReference": 5,
+        "other": 0
+      },
+      "classes": 15,
+      "hermeticClasses": 0,
       "hermetic": 23,
       "hermeticMembers": 0,
       "direct": 10,
@@ -269,7 +302,7 @@
       "unnamed": 0,
       "unnamedPassedTo": {},
       "validation": {
-        "filesChanged": 17,
+        "filesChanged": 25,
         "parseErrors": 0,
         "sealedErrors": 0,
         "unsettledFiles": 0,
@@ -350,12 +383,13 @@
     "functions": 14416,
     "methods": 1569,
     "classes": 371,
-    "hermetic": 1252,
-    "same": 11595,
+    "hermetic": 1597,
+    "same": 13173,
     "agreed": {
-      "freeVariable": 56398,
-      "method": 1569,
-      "lexicalThis": 1230
+      "freeVariable": 64577,
+      "lexicalThis": 1230,
+      "privateName": 443,
+      "superReference": 26
     },
     "moduleOnly": [],
     "differing": 0
@@ -365,8 +399,8 @@
     "lifted": {
       "source": "lifted",
       "lifted": 2475,
-      "date": "2026-09-26T01:15:11.005Z",
-      "commit": "002b3fb",
+      "date": "2026-09-28T18:20:46.052Z",
+      "commit": "bd7fe96",
       "dirty": false,
       "files": 520,
       "tests": 6243,
@@ -377,8 +411,8 @@
     "unlifted": {
       "source": "unlifted",
       "lifted": 2475,
-      "date": "2026-09-26T01:20:36.080Z",
-      "commit": "002b3fb",
+      "date": "2026-09-28T18:25:40.081Z",
+      "commit": "bd7fe96",
       "dirty": false,
       "files": 520,
       "tests": 6243,
@@ -387,30 +421,30 @@
       "skipped": 10
     },
     "bench": {
-      "date": "2026-09-26T01:22:51.794Z",
-      "commit": "002b3fb",
+      "date": "2026-09-28T18:27:49.699Z",
+      "commit": "bd7fe96",
       "dirty": false,
       "node": "v22.22.2",
       "processes": 4,
       "samples": 7,
       "workloads": {
         "Effect.gen, map, flatMap": {
-          "original": 104.65745800000013,
-          "lifted": 118.75640999999973,
-          "unlifted": 104.40974000000006,
-          "control": 105.64640300000019
+          "original": 84.960239,
+          "lifted": 102.68383900000003,
+          "unlifted": 92.55643000000009,
+          "control": 95.30060200000003
         },
         "Chunk, HashMap, Option": {
-          "original": 58.825213000000076,
-          "lifted": 90.7503569999999,
-          "unlifted": 59.21223000000009,
-          "control": 58.983168000000205
+          "original": 49.97180000000026,
+          "lifted": 72.23302100000001,
+          "unlifted": 46.01706400000012,
+          "control": 47.87847099999999
         },
         "Schema decode": {
-          "original": 47.11767000000009,
-          "lifted": 55.21625300000005,
-          "unlifted": 46.163771,
-          "control": 45.908214000000044
+          "original": 47.949209999999766,
+          "lifted": 56.94366200000013,
+          "unlifted": 48.238816999999926,
+          "control": 47.258350000000064
         }
       }
     }

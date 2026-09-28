@@ -4,7 +4,7 @@ import { HermeticError } from "../src/index.ts";
 
 /** Evaluates a module written in JavaScript, and returns its exports as a namespace would hold them. */
 function load(source: string): Record<string, unknown> {
-  const names = [...source.matchAll(/export (?:async )?(?:function\*? ?|const )([\w$]+)/g)].map((match) => match[1]);
+  const names = [...source.matchAll(/export (?:async )?(?:function\*? ?|const |class )([\w$]+)/g)].map((match) => match[1]);
   return new Function(`"use strict";\n${source.replace(/^export /gm, "")}\nreturn { ${names.join(", ")} };`)() as Record<string, unknown>;
 }
 
@@ -39,6 +39,29 @@ describe("doctests", () => {
       `}`,
     ].join("\n");
     expect(await results(source)).toEqual({ "toCents: example 1": "passed", "toCents: Negative amounts": "passed" });
+  });
+
+  it("runs the examples of a hermetic class, marked by its constructor, rebuilt from its source too", async () => {
+    const source = [
+      `/**`,
+      ` * Counts up from where it starts.`,
+      ` * @example`,
+      ` * const counter = new Counter(2);`,
+      ` * counter.next() // => 3`,
+      ` * counter.next() // => 4`,
+      ` */`,
+      `export class Counter {`,
+      `  #n;`,
+      `  constructor(start) {`,
+      `    "use hermetic";`,
+      `    this.#n = start;`,
+      `  }`,
+      `  next() {`,
+      `    return ++this.#n;`,
+      `  }`,
+      `}`,
+    ].join("\n");
+    expect(await results(source)).toEqual({ "Counter: example": "passed" });
   });
 
   it("compares values by structure, awaits, and checks what an example throws", async () => {

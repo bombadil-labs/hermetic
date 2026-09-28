@@ -21,6 +21,8 @@ Every value a function reads is one of its inputs, whether or not it appears in 
 
 Built-ins are inputs too. `Math` and `JSON` are globals like `fetch` and `Date`: which ones exist, and what they do, depends on the runtime and on any code that replaced them. So a hermetic function doesn't name them either. The code that binds it passes in the ones it needs, and [`intrinsics`](packages/hermetic/README.md#intrinsics) picks the deterministic ones out of the runtime. `undefined`, `NaN` and `Infinity` can't be changed, so they read like keywords.
 
+Methods can be hermetic too, since a method's `this` is the object it's called on: one of its inputs. A hermetic method reads nothing but its arguments and its object, not its class's private names or `super`, so it works on any object that has what it reads. [`methods`](packages/hermetic/README.md#methods) builds a class out of such functions, each of which can be tested alone. A whole class is hermetic when its constructor is marked.
+
 Hermetic doesn't mean pure. A hermetic function can change its inputs, or call methods on them that do I/O. Purity can't be checked in JavaScript, because any input can be a Proxy. Whether a function reads anything besides its inputs can be checked, with the same scope analysis ESLint uses to find undefined variables.
 
 What you get:
@@ -45,7 +47,7 @@ What you get:
 | Package | What it does |
 | --- | --- |
 | [`@bombadil/eslint-plugin-hermetic`](packages/eslint-plugin-hermetic) | ESLint rules. `hermetic/sealed` checks the functions you mark as hermetic, and `hermetic/prefer-hermetic` finds functions that already are, and rewrites others so they can be. |
-| [`@bombadil/hermetic`](packages/hermetic) | The same check at runtime, with no ESLint. `check` reads a function's source and reports what it reads besides its inputs, `confine` runs a hermetic function in a [Hardened JS](https://hardenedjs.org/) compartment, and `intrinsics` picks the deterministic built-ins out of the runtime, to pass in. `inject`, if you want it, binds a function to exactly the names it reads. `record` and `replay` turn a real call into a test, and `doctests` runs the examples in a function's JSDoc. |
+| [`@bombadil/hermetic`](packages/hermetic) | The same check at runtime, with no ESLint. `check` reads a function's source and reports what it reads besides its inputs, `confine` runs a hermetic function in a [Hardened JS](https://hardenedjs.org/) compartment, and `intrinsics` picks the deterministic built-ins out of the runtime, to pass in. `inject`, if you want it, binds a function to exactly the names it reads. `record` and `replay` turn a real call into a test, `doctests` runs the examples in a function's JSDoc, and `methods` builds a class out of hermetic functions. |
 
 The plugin lints in your editor and CI:
 
@@ -73,18 +75,17 @@ const fn = confine(source); // throws a HermeticError unless it is hermetic
 fn.call(harden(intrinsics(globalThis)), input); // the built-ins it uses come in through this
 ```
 
-`check` reports what `hermetic/sealed` reports. On the 14,416 functions and methods in the published JavaScript of Effect, RxJS and TanStack Query, the two report the same problems at the same places, every one.
+`check` reports what `hermetic/sealed` reports. On the 14,416 functions and methods, and the 371 classes, in the published JavaScript of Effect, RxJS and TanStack Query, the two report the same problems at the same places, every one.
 
-Up to 0.2.0, `@bombadil/hermetic` was the ESLint plugin. From 0.3.0, its rules are in `@bombadil/eslint-plugin-hermetic`, hermetic functions read no globals, so the `ground` and `aliasing` settings are gone, and methods can't be hermetic yet.
+Up to 0.2.0, `@bombadil/hermetic` was the ESLint plugin. From 0.3.0, its rules are in `@bombadil/eslint-plugin-hermetic`, hermetic functions read no globals, so the `ground` and `aliasing` settings are gone, and a hermetic method can't use its class's private names.
 
-The rules are documented in [the plugin's README](packages/eslint-plugin-hermetic): [marking a function](packages/eslint-plugin-hermetic/README.md#marking-a-function), [what the rule reports](packages/eslint-plugin-hermetic/README.md#what-the-rule-reports), [built-ins](packages/eslint-plugin-hermetic/README.md#built-ins-come-in-through-this), [options](packages/eslint-plugin-hermetic/README.md#options), [binding `this`](packages/eslint-plugin-hermetic/README.md#binding-this) and [making a codebase hermetic](packages/eslint-plugin-hermetic/README.md#making-a-codebase-hermetic).
+The rules are documented in [the plugin's README](packages/eslint-plugin-hermetic): [marking a function](packages/eslint-plugin-hermetic/README.md#marking-a-function), [methods and classes](packages/eslint-plugin-hermetic/README.md#methods-and-classes), [what the rule reports](packages/eslint-plugin-hermetic/README.md#what-the-rule-reports), [built-ins](packages/eslint-plugin-hermetic/README.md#built-ins-come-in-through-this), [options](packages/eslint-plugin-hermetic/README.md#options), [binding `this`](packages/eslint-plugin-hermetic/README.md#binding-this) and [making a codebase hermetic](packages/eslint-plugin-hermetic/README.md#making-a-codebase-hermetic).
 
 ## What hermetic functions don't give you
 
 - **Purity.** A hermetic function can do anything its inputs allow, and any input can be a Proxy.
 - **A sandbox, by itself.** Every value, even a literal, is connected to the program's shared built-ins through its prototype chain. A hermetic function can change them, as in `({}).__proto__.hasOwnProperty = () => true`, which changes `hasOwnProperty` for every object in the program, or reach the global object with `[].constructor.constructor("return globalThis")()`. The rule and `check` look at names, and these reach the built-ins through values. ESLint's own `no-proto` and `no-extend-native` rules catch the direct spellings, but not computed keys or `Object.getPrototypeOf`. For code you don't trust, use [`confine`](packages/hermetic/README.md#confine): it runs a function in a [Hardened JS](https://hardenedjs.org/) compartment, where the shared built-ins are frozen, so writes like these throw, and the global object is empty.
 - **Determinism by itself.** A hermetic function sees only its inputs, so, like a hermetic build, it behaves the same whenever they are the same. Pass it a clock or a random source and its results vary, but through an input you can see and replace. That is what makes record and replay possible.
-- **Hermetic methods, yet.** A method's `this` is its object, not its inputs, so methods, accessors and classes can't be hermetic for now. A function stored in an object's property can.
 
 ## Status
 
@@ -100,7 +101,8 @@ The rules are documented in [the plugin's README](packages/eslint-plugin-hermeti
 | | `check`: the same check at runtime, from a function's source, validated against the rule on the corpus | Done |
 | | `confine`: running a hermetic function in a Hardened JS compartment | Done |
 | | No globals: built-ins come in through `this`, and `intrinsics` picks them out of a runtime | Done |
-| | Hermetic methods | Later |
+| | Hermetic methods and classes, and `methods` to build a class out of hermetic functions | Done |
+| | Lifting methods | Later |
 | | `unliftPlugin`: unlifts Vite builds, with source maps into the lifted source | Done |
 
 ## Development

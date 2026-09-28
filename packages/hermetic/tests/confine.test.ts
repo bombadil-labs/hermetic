@@ -71,11 +71,32 @@ describe("after lockdown()", () => {
     expect(error.source).toBe("(a) => a + b + Math.max(a)");
   });
 
-  it("refuses methods and classes, which can't be hermetic yet", () => {
-    expect(thrown(() => confine("area() { return this.w * this.h }")).message).toBe(
-      "Not hermetic: it is a method, which can't be hermetic yet (at 0).",
+  it("confines a method, rebuilt from its source as the only member of an object", () => {
+    const area = confine<(this: { w: number; h: number }) => number>("area() { return this.w * this.h }");
+    expect(area.call({ w: 2, h: 3 })).toBe(6);
+    const size = confine<(this: { items: unknown[] }) => number>("get size() { return this.items.length }");
+    expect(size.call({ items: [1, 2] })).toBe(2);
+  });
+
+  it("confines a class", () => {
+    const Point = confine<new (x: number) => { x: number }>("class Point { constructor(x) { this.x = x } }");
+    expect(new Point(3).x).toBe(3);
+  });
+
+  it("refuses a method that reads a private name of its class", () => {
+    expect(thrown(() => confine("total() { return this.#items.length }")).message).toBe(
+      "Not hermetic: '#items' is a private name of a class around it, so it works only inside that class (at 22).",
     );
-    expect(thrown(() => confine("class Point {}")).problems).toMatchObject([{ kind: "method", name: "class" }]);
+  });
+
+  it("can't rebuild a private method, whose name only its class can hold", () => {
+    expect(thrown(() => confine("#secret() { return 1 }")).message).toMatch(/^The compartment could not evaluate it/);
+  });
+
+  it("can't rebuild a method whose computed key reads a global, which the compartment doesn't have", () => {
+    const error = thrown(() => confine("*[Symbol.iterator]() { yield* this.items }"));
+    expect(error.message).toMatch(/^The compartment could not evaluate it/);
+    expect(error.problems).toEqual([]);
   });
 
   it("refuses a bound function, whose source isn't available", () => {

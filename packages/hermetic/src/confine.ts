@@ -1,4 +1,5 @@
 import { check, type FunctionLike, type Problem } from "./check.ts";
+import { onlyMember, rebuildable } from "./rebuild.ts";
 
 /** Thrown by `confine` when a function isn't hermetic, or can't be evaluated in a compartment. */
 export class HermeticError extends Error {
@@ -62,7 +63,8 @@ export function confine<F extends FunctionLike = (...args: unknown[]) => unknown
 
   let confined: unknown;
   try {
-    confined = compartment.evaluate(`(${source}\n)`);
+    const made = compartment.evaluate(rebuildable(source, result.form));
+    confined = result.form === "method" ? onlyMember(made) : made;
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new HermeticError(`The compartment could not evaluate it: ${reason}`, source, [], { cause: error });
@@ -90,9 +92,9 @@ function explain(problem: Problem): string {
     case "freeVariable":
       return `'${name}' is a free variable`;
     case "lexicalThis":
-      return "'this' in an arrow function comes from the enclosing scope";
+      return "'this' comes from the enclosing scope, as in an arrow function";
     case "lexicalNewTarget":
-      return "'new.target' in an arrow function comes from the enclosing scope";
+      return "'new.target' comes from the enclosing scope, as in an arrow function";
     case "superReference":
       return "'super' refers to the enclosing class or object";
     case "importMeta":
@@ -101,8 +103,8 @@ function explain(problem: Problem): string {
       return "import() loads a module that is not one of its inputs";
     case "withStatement":
       return "a 'with' statement can turn any name into a member of its object";
-    case "method":
-      return `it is a ${name}, which can't be hermetic yet`;
+    case "privateName":
+      return `'${name}' is a private name of a class around it, so it works only inside that class`;
     case "syntax":
       return `it does not parse: ${name}`;
     case "notAFunction":

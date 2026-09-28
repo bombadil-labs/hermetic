@@ -34,10 +34,11 @@ export type ProblemKind =
   /** A `with` statement, which can turn any name inside it into a member of its object. */
   | "withStatement"
   /**
-   * The source is a method, accessor or class, which can't be hermetic yet:
-   * its `this` is its object, not its inputs. `name` says which.
+   * A private name, such as `#count`, that a class outside the checked source
+   * declares. Only that class can use it, so the source can't be rebuilt or
+   * moved without it.
    */
-  | "method"
+  | "privateName"
   /** The source doesn't parse; `name` holds the parser's message. */
   | "syntax"
   /** The source parses, but not as a single function, method, accessor or class. */
@@ -59,20 +60,25 @@ export interface CheckResult {
   /**
    * `"function"` for a function or arrow function, `"method"` for a method or
    * accessor, `"class"` for a class, and undefined when the source is none of
-   * these. Only functions can be hermetic.
+   * these.
    */
   readonly form: "function" | "method" | "class" | undefined;
   /** Its body starts with a `"use hermetic"` directive; for a class, its constructor's body. */
   readonly marked: boolean;
-  /** It is a function that reads nothing but its inputs. */
+  /**
+   * It reads nothing but its inputs. A function's inputs are its arguments,
+   * including `this`, and a method's are the same, with its object as `this`.
+   * A class is hermetic when everything in it is: its constructor, fields,
+   * static blocks and methods read nothing from outside the class.
+   */
   readonly hermetic: boolean;
   readonly problems: readonly Problem[];
   /**
-   * The names the function reads from `this`, in the order it first reads
-   * them: `this.name`, or `const { name } = this`. Undefined when it uses
-   * `this` in a way that doesn't name what it reads, as in `this[key]` or
-   * `helper(this)`, and for anything but a function. An arrow function's
-   * `this` isn't one of its inputs, so it needs nothing.
+   * The names a function or method reads from `this`, in the order it first
+   * reads them: `this.name`, or `const { name } = this`. Undefined when it
+   * uses `this` in a way that doesn't name what it reads, as in `this[key]`
+   * or `helper(this)`, and for a class. An arrow function's `this` isn't one
+   * of its inputs, so it needs nothing.
    */
   readonly needs: readonly string[] | undefined;
 }
@@ -119,6 +125,8 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
     readonly ownSuper: boolean;
     /** `this` is the checked function's own, one of its inputs. */
     readonly rootThis: boolean;
+    /** The private names that classes inside the checked source declare around this point. */
+    readonly privates: Scope | undefined;
   }
   type FunctionFound = ES.FunctionExpression | ES.ArrowFunctionExpression;
   type Found = FunctionFound | ES.ClassExpression;
@@ -193,7 +201,6 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
     if (expression?.type !== "ClassExpression" || expression.body.body.length !== 1) return undefined;
     const member = expression.body.body[0];
     if (member?.type !== "MethodDefinition" || member.kind === "constructor") return undefined;
-    accessor = member.kind !== "method";
     return member.value;
   }
 
@@ -203,7 +210,6 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
     const property = expression.properties[0];
     if (property?.type !== "Property" || (!property.method && property.kind === "init")) return undefined;
     if (property.value.type !== "FunctionExpression") return undefined;
-    accessor = property.kind !== "init";
     return property.value;
   }
 
@@ -226,8 +232,6 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
 
   let root: Found | undefined;
   let form: "function" | "method" | "class" | undefined;
-  /** The method found is a getter or setter. */
-  let accessor = false;
   let parsedOtherwise = false;
   // Of the failed parses, the one that got furthest into the source is the likeliest intended form.
   let syntaxError: { message: string; at: number } | undefined;
@@ -276,12 +280,6 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
       if (statement.directive === "use hermetic") marked = true;
     }
   }
-  // A method's or class's `this` is its object, not its inputs, so neither can be hermetic yet.
-  if (form !== "function") {
-    const name = form === "class" ? "class" : accessor ? "accessor" : "method";
-    return { form, marked, hermetic: false, problems: [{ kind: "method", name, start: 0, end: source.length }], needs: undefined };
-  }
-
   function declare(pattern: ES.Pattern, context: Context, target: Scope): void {
     switch (pattern.type) {
       case "Identifier":
@@ -364,6 +362,7 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
       ownThis: arrow ? outer.ownThis : true,
       ownSuper: arrow ? outer.ownSuper : home,
       rootThis: arrow ? outer.rootThis : root,
+      privates: outer.privates,
     };
     for (const parameter of fn.params) declare(parameter, inner, parameters);
     const body = scopeIn(parameters);
@@ -375,13 +374,19 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
   function visitClass(node: ES.Class, context: Context): void {
     const scope = scopeIn(context.scope);
     if (node.id) scope.names.push(node.id.name);
-    // The heritage and computed keys run in the enclosing context, with the class name in scope.
-    const around: Context = { ...context, scope };
-    if (node.superClass) visit(node.superClass, around);
+    // The heritage runs in the enclosing context, with the class name in scope.
+    const heritage: Context = { ...context, scope };
+    if (node.superClass) visit(node.superClass, heritage);
+    // Computed keys run there too, but with the class's private names in scope, as its members are.
+    const privates = scopeIn(context.privates);
+    for (const member of node.body.body) {
+      if (member.type !== "StaticBlock" && member.key.type === "PrivateIdentifier") privates.names.push(member.key.name);
+    }
+    const around: Context = { ...heritage, privates };
     for (const member of node.body.body) {
       if (member.type === "StaticBlock") {
         const block = scopeIn(scope);
-        const blockContext: Context = { scope: block, varScope: block, ownThis: true, ownSuper: true, rootThis: false };
+        const blockContext: Context = { scope: block, varScope: block, ownThis: true, ownSuper: true, rootThis: false, privates };
         for (const statement of member.body) visit(statement, blockContext);
         continue;
       }
@@ -389,6 +394,10 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
       if (member.type === "MethodDefinition") visitFunction(member.value, around, true, false);
       else if (member.value) visit(member.value, { ...around, scope: scopeIn(scope), ownThis: true, ownSuper: true, rootThis: false });
     }
+  }
+
+  function visitPrivate(node: ES.PrivateIdentifier, context: Context): void {
+    if (!resolves(node.name, context.privates)) report("privateName", `#${node.name}`, node);
   }
 
   function visitChildren(node: ES.Node, context: Context): void {
@@ -431,6 +440,7 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
           visit(node.object, context);
         }
         if (node.computed) visit(node.property, context);
+        else if (node.property.type === "PrivateIdentifier") visitPrivate(node.property, context);
         return;
       case "Property":
         if (node.computed) visit(node.key, context);
@@ -510,10 +520,13 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
       case "LabeledStatement":
         visit(node.body, context);
         return;
+      case "PrivateIdentifier":
+        // The left side of `#name in object`; a class member's own key is never visited.
+        visitPrivate(node, context);
+        return;
       case "BreakStatement":
       case "ContinueStatement":
       case "Literal":
-      case "PrivateIdentifier":
         return;
       case "WithStatement":
         report("withStatement", "with", node);
@@ -524,13 +537,17 @@ export function checkHermetic(this: CheckContext, source: string): CheckResult {
     }
   }
 
+  // A method's `this` is its object, one of its inputs, like a function's. Its
+  // `super` is its class's, outside the source. A class is checked whole.
   const outside = scopeIn(undefined);
-  visitFunction(root as ES.Function, { scope: outside, varScope: outside, ownThis: false, ownSuper: false, rootThis: false }, false, true);
+  const start: Context = { scope: outside, varScope: outside, ownThis: false, ownSuper: false, rootThis: false, privates: undefined };
+  if (root.type === "ClassExpression") visitClass(root, start);
+  else visitFunction(root, start, false, true);
 
   for (const reference of references) {
     if (resolves(reference.name, reference.scope) || immutable.includes(reference.name)) continue;
     report("freeVariable", reference.name, reference.node);
   }
   problems.sort((a, b) => a.start - b.start || a.end - b.end);
-  return { form, marked, hermetic: problems.length === 0, problems, needs: unlisted ? undefined : needs };
+  return { form, marked, hermetic: problems.length === 0, problems, needs: unlisted || form === "class" ? undefined : needs };
 }

@@ -20,39 +20,47 @@ describe("check: forms", () => {
   });
 
   it.each([
-    ["a method", "total(items) { return items.length }", "method"],
-    ["a getter", "get size() { return this.items.length }", "accessor"],
-    ["a setter", "set size(value) { this.items.length = value }", "accessor"],
-    ["an async generator method", "async *pages(n) { yield n }", "method"],
-    ["a method with a computed key", "[this.key]() { return this }", "method"],
-    ["a private method", "#total() { return this.#items.length }", "method"],
-    ["an object literal's method named constructor", "constructor() { return this }", "method"],
-  ])("refuses %s, whose this is its object", (_label, source, name) => {
-    expect(check(source)).toEqual({
-      form: "method",
-      marked: false,
-      hermetic: false,
-      problems: [{ kind: "method", name, start: 0, end: source.length }],
-    });
+    ["a method", "total(items) { return items.length }", []],
+    ["a getter", "get size() { return this.items.length }", ["items"]],
+    ["a setter", "set size(value) { this.items.length = value }", ["items"]],
+    ["an async generator method", "async *pages(n) { yield n }", []],
+    ["a method with a computed key, which runs outside it", "[this.key]() { return this.value }", ["value"]],
+    ["an object literal's method named constructor", "constructor() { return this.value }", ["value"]],
+  ])("reads %s as a method, whose this is its object", (_label, source, needs) => {
+    expect(check(source)).toEqual({ form: "method", marked: false, hermetic: true, problems: [], needs });
   });
 
-  it("refuses a class", () => {
+  it("reads a class whole", () => {
     expect(check("class Shape { area() { return 0 } }")).toEqual({
       form: "class",
       marked: false,
-      hermetic: false,
-      problems: [{ kind: "method", name: "class", start: 0, end: 35 }],
+      hermetic: true,
+      problems: [],
+      needs: undefined,
     });
   });
 
-  it("takes a function value, through Function.prototype.toString", () => {
+  it("takes a function, method or class value, through Function.prototype.toString", () => {
     const shape = {
       area(width: number, height: number) {
         return width * height;
       },
     };
+    class Rect {
+      width = 1;
+      height = 1;
+      area() {
+        return this.width * this.height;
+      }
+      static unit() {
+        return new this();
+      }
+    }
     expect(check((a: number) => a * 2)).toMatchObject({ form: "function", hermetic: true });
-    expect(check(shape.area)).toMatchObject({ form: "method", hermetic: false });
+    expect(check(shape.area)).toMatchObject({ form: "method", hermetic: true });
+    expect(check(Rect.prototype.area)).toMatchObject({ form: "method", hermetic: true, needs: ["width", "height"] });
+    expect(check(Rect.unit)).toMatchObject({ form: "method", hermetic: true });
+    expect(check(Rect)).toMatchObject({ form: "class", hermetic: true });
   });
 
   it.each([
@@ -114,8 +122,13 @@ describe("check: marking", () => {
     expect(check("function () { return 1 }")).toMatchObject({ marked: false, hermetic: true });
   });
 
-  it("finds it in a method it refuses", () => {
-    expect(check('m() { "use hermetic"; return 1 }')).toMatchObject({ marked: true, hermetic: false });
+  it("finds it in a method", () => {
+    expect(check('m() { "use hermetic"; return 1 }')).toMatchObject({ marked: true, hermetic: true });
+  });
+
+  it("finds it in a class's constructor", () => {
+    expect(check('class { constructor() { "use hermetic"; } }')).toMatchObject({ form: "class", marked: true });
+    expect(check('class { m() { "use hermetic"; } }')).toMatchObject({ form: "class", marked: false });
   });
 });
 
@@ -213,7 +226,7 @@ describe("check: this, super and the module", () => {
   it("reads a function using super as a method named function, the only way it parses", () => {
     expect(check("function () { return super.m() }")).toMatchObject({
       form: "method",
-      problems: [{ kind: "method", name: "method" }],
+      problems: [{ kind: "superReference", name: "super" }],
     });
   });
 
@@ -278,8 +291,8 @@ describe("check: needs", () => {
     expect(needs("(a) => a.b")).toEqual([]);
   });
 
-  it("gives no list for a method, a class or source that isn't a function", () => {
-    expect(needs("area() { return this.w * this.h }")).toBeUndefined();
+  it("lists what a method needs, and gives no list for a class or source that isn't a function", () => {
+    expect(needs("area() { return this.w * this.h }")).toEqual(["w", "h"]);
     expect(needs("class { m() { return this.a } }")).toBeUndefined();
     expect(needs("function (a {")).toBeUndefined();
   });
@@ -326,5 +339,59 @@ describe("checkHermetic", () => {
     };
     expect(checkHermetic.call(tracing, "function (o) { with (o) {} }")).toMatchObject({ hermetic: false });
     expect(seen).toEqual(["module", "module", "module", "script"]);
+  });
+});
+
+describe("check: methods", () => {
+  it("lists what a method reads from its object, siblings included", () => {
+    expect(check("perimeter() { return 2 * (this.width + this.height) + this.area() * 0 }").needs).toEqual(["width", "height", "area"]);
+  });
+
+  it("reports super, whose class is outside the method", () => {
+    expect(problems("toString() { return 'Rect:' + super.toString() }")).toEqual(["superReference:super"]);
+  });
+
+  it("reports the private names of the class around it, where they are used", () => {
+    const source = "get count() { return this.#n + (#m in this ? 1 : 0) }";
+    expect(check(source).problems).toEqual([
+      { kind: "privateName", name: "#n", start: 26, end: 28 },
+      { kind: "privateName", name: "#m", start: 32, end: 34 },
+    ]);
+  });
+
+  it("allows private names that a class inside the method declares", () => {
+    expect(problems("make() { return class { #x = 1; get x() { return this.#x } static has(o) { return #x in o } } }")).toEqual([]);
+  });
+
+  it("reports its class's own name, which is outside it", () => {
+    expect(problems("static unit() { return new Rect(1, 1) }")).toEqual(["freeVariable:Rect"]);
+  });
+});
+
+describe("check: classes", () => {
+  it("allows the private names and the name the class declares", () => {
+    const source = "class Counter { #n = 0; constructor(start) { this.#n = start } next() { return ++this.#n } static is(o) { return #n in o } static zero() { return new Counter(0) } }";
+    expect(check(source)).toMatchObject({ form: "class", hermetic: true, problems: [] });
+  });
+
+  it("reports what any member reads from outside the class", () => {
+    expect(problems("class Cache extends Base { items = new Map(); static { register(this) } get size() { return LIMIT } }")).toEqual([
+      "freeVariable:Base",
+      "freeVariable:Map",
+      "freeVariable:register",
+      "freeVariable:LIMIT",
+    ]);
+  });
+
+  it("reports this in its computed keys, which run outside it", () => {
+    expect(problems("class { [this.key]() { return this } }")).toEqual(["lexicalThis:this"]);
+  });
+
+  it("allows super in its own members", () => {
+    expect(problems("class { toString() { return super.toString() } }")).toEqual([]);
+  });
+
+  it("reports private names from a class around it, even in its heritage", () => {
+    expect(problems("class extends (class { static has(o) { return #x in o } }) { #x = 1 }")).toEqual(["privateName:#x"]);
   });
 });

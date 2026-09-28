@@ -37,6 +37,11 @@
       "types": "./dist/record.d.ts",
       "default": "./dist/record.js"
     },
+    "./methods": {
+      "@bombadil/source": "./src/methods.ts",
+      "types": "./dist/methods.d.ts",
+      "default": "./dist/methods.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

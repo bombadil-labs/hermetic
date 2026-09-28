@@ -8,7 +8,9 @@ A hermetic function reads nothing but its inputs: its arguments, including `this
 
 A function is hermetic when its body starts with a `"use hermetic"` directive, or when a JSDoc block before it (or before the declaration that introduces it) has an `@hermetic` tag at the start of a line. Unmarked functions are not checked.
 
-Methods can't be hermetic yet. A method's `this` is its object, not its inputs, so a marked method, accessor or class field is reported. A function stored in an object's property, as in `{ area: function () {} }`, is a function, and can be.
+A method can be hermetic too. Its `this` is the object it's called on, one of its inputs, so it can read the object's properties and call its other methods through `this`. What only its class can reach is a hidden input: `super`, the class's private names such as `#count`, and the class by name. Getters, setters, static methods and the methods of object literals are methods. An arrow function in a class field isn't: its `this` comes from the class around it.
+
+A class is hermetic when its constructor is marked, or when a JSDoc block before the class has an `@hermetic` tag. A class is its constructor, whose source is the whole class, so everything in it is checked as one function: the heritage clause, field initializers, static blocks and every method. Its `super`, its private names and its own name are then part of it, not hidden inputs.
 
 ## Rule details
 
@@ -42,11 +44,21 @@ const rate = () => {
   return this.rate; // an arrow function's this comes from the enclosing scope
 };
 
-class Pricing {
-  apply() {
-    "use hermetic"; // methods can't be hermetic yet
-    return this.rate;
+class Counter extends Base {
+  #count = 0;
+  next() {
+    "use hermetic";
+    return ++this.#count; // #count works only inside Counter
   }
+  reset() {
+    "use hermetic";
+    return super.reset(); // super is Counter's, not an input
+  }
+}
+
+/** @hermetic */
+class Cache {
+  items = new Map(); // a hermetic class is checked whole, fields included
 }
 
 function url() {
@@ -94,6 +106,26 @@ function total(invoice: Invoice) {
   "use hermetic";
   return invoice.total; // types are erased (with types: "allow")
 }
+
+class Rect {
+  width = 0;
+  height = 0;
+  area() {
+    "use hermetic";
+    return this.width * this.height; // a method's this is its object
+  }
+}
+
+class Tally {
+  #count: number;
+  constructor(start: number) {
+    "use hermetic"; // marks the whole class
+    this.#count = start;
+  }
+  next() {
+    return ++this.#count; // the class's own private name
+  }
+}
 ```
 
 ### Every check
@@ -101,14 +133,14 @@ function total(invoice: Invoice) {
 | Message | Reported when |
 | --- | --- |
 | `freeVariable` | A value reference comes from outside the function: an import, a module-level variable, or a global, built-ins such as `Math` and `Array` included. `undefined`, `NaN` and `Infinity` read like keywords, unless something outside the function declares the name. |
-| `method` | A method, accessor or class field is marked. Methods can't be hermetic yet. |
+| `privateName` | A private name, such as `#count`, that a class around the hermetic function declares. The function would work only inside that class: not on another object, and not rebuilt from its source. A hermetic class may use its own. |
 | `typeReference` | With `types: "structural-only"`: a type reference resolves to a declaration outside the function. |
-| `lexicalThis`, `lexicalNewTarget` | `this` or `new.target` inside a hermetic arrow function, or inside an arrow function nested in one, before any function that sets its own `this`. |
-| `superReference` | `super` that refers to a class or object outside the hermetic function, as in an arrow function defined in a method. |
+| `lexicalThis`, `lexicalNewTarget` | `this` or `new.target` inside a hermetic arrow function, or inside an arrow function nested in one, before any function that sets its own `this`. In a hermetic class, the same in its heritage clause or a computed key, which run outside the class. |
+| `superReference` | `super` that refers to a class or object outside the hermetic function: in a hermetic method, or an arrow function defined in a method. A hermetic class's `super` is its own. |
 | `importMeta`, `dynamicImport` | `import.meta` or `import()` anywhere inside the hermetic function. |
 | `jsx` | The root of a JSX tree inside the hermetic function. |
 
-When hermetic functions are nested, a problem is reported once, for the innermost of them.
+When hermetic functions are nested, a problem is reported once, for the innermost of them. A marked method in a hermetic class counts as nested in it.
 
 This rule checks names. It can't follow values, so it doesn't stop a hermetic function from reaching the program's shared built-ins through a prototype chain, as in `({}).__proto__.hasOwnProperty = () => true`. To run a function you don't trust, use [`confine`](../../../hermetic/README.md#confine) from `@bombadil/hermetic`, which runs it in a Hardened JS compartment where the shared built-ins are frozen. See [what hermetic functions don't give you](../../../../README.md#what-hermetic-functions-dont-give-you).
 

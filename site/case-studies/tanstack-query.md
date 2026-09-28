@@ -5,7 +5,7 @@ description: What prefer-hermetic did to TanStack Query {{tanstack.version}}: st
 
 # TanStack Query: {{tanstack.hermeticPct}} already hermetic
 
-<p class="lede">TanStack Query is two packages: <code>@tanstack/query-core</code>, a framework-agnostic data-fetching cache made of classes and helpers, and <code>@tanstack/react-query</code>, its React hooks. Of the three libraries, it's the closest to application code, with stateful classes, hooks and a couple of components. {{tanstack.methodsPctOfNamed}} of its named functions are methods, which can't be hermetic yet, and its helpers read built-ins, the clock among them.</p>
+<p class="lede">TanStack Query is two packages: <code>@tanstack/query-core</code>, a framework-agnostic data-fetching cache made of classes and helpers, and <code>@tanstack/react-query</code>, its React hooks. Of the three libraries, it's the closest to application code, with stateful classes, hooks and a couple of components. {{tanstack.methodsPctOfNamed}} of its named functions are methods, most of which use their class's private fields, and its helpers read built-ins, the clock among them.</p>
 
 It covers the TypeScript source that both packages publish to npm at version {{tanstack.version}}: {{tanstack.files}} files and {{tanstack.candidates}} candidate functions, not counting {{tanstack.methods}} methods.
 
@@ -53,7 +53,10 @@ In react-query, hooks written as arrow functions lift with `React` passed in dir
 
 ## Classes and components
 
-- **Methods**, {{tanstack.methods}} of them, in `Query`, `QueryClient`, the caches and the observers, aren't counted. A method's `this` is its object, not its inputs, so methods can't be hermetic yet.
+TanStack Query's {{tanstack.methods}} methods are in `Query`, `QueryClient`, the caches and the observers. {{tanstack.hermeticMethods}} of them are already hermetic, and the fix marks them. The lift doesn't rewrite methods yet.
+
+Of the other {{tanstack.otherMethods}}, {{tanstack.methodsPrivate}} use private fields of their class, such as the `#queries` of `QueryCache`. A hermetic method can't: a private name works only inside the class that declares it, so a method that uses one can't be tested with another object, installed on another class, or rebuilt from its source. The class as a whole can use its own private fields, but marking a class checks every member at once, and {{tanstack.hermeticClasses}} of its {{tanstack.classes}} classes pass that check.
+
 - **Object members**, {{tanstack.members}} of them, are skipped: the lift only rewrites functions declared at the top level of a module. They're the default timers in `timeoutManager.ts`, which call the global `setTimeout` and its relatives.
 - `QueryClientProvider` and `QueryErrorResetBoundary` render JSX. JSX compiles to calls to a factory function that the source never names, so the lift has nothing to pass in, and both are skipped.
 

@@ -1,7 +1,7 @@
 import { AST_NODE_TYPES, AST_TOKEN_TYPES, ASTUtils, type TSESLint, type TSESTree } from "@typescript-eslint/utils";
 import { applyEdits, arrowToken, childNodes, type Edit, LINE_BREAK, looseComments, parameterSpan, renderComments } from "./ast.ts";
 import { type Environment, isAmbient, isTypeOnly, type MessageIds, type Problem } from "./analysis.ts";
-import { directiveInsertion, type FunctionNode, isFunctionNode, isMarkedHermetic } from "./marking.ts";
+import { directiveInsertion, type FunctionNode, isFunctionNode, isMarkedHermetic, isMethod } from "./marking.ts";
 
 type Reference = TSESLint.Scope.Reference;
 type SourceCode = Readonly<TSESLint.SourceCode>;
@@ -65,6 +65,8 @@ export interface LiftPlan {
 /** Why a function was not lifted: the first check it failed. */
 export type LiftBlocker =
   | "structural-only types"
+  /** A method or accessor: its `this` is its object, so the lift has nowhere to put what it lifts yet. */
+  | "a method"
   | "an object member"
   | "not declared at module level"
   | "a named function expression"
@@ -184,6 +186,7 @@ interface LiftSite {
 /** Only module-level declarations and single `const`/`let` initializers keep their callers intact. */
 function liftSite(fn: FunctionNode): LiftSite | LiftBlocker {
   const parent = fn.parent;
+  if (isMethod(fn)) return "a method";
   if (
     parent.type === AST_NODE_TYPES.Property ||
     parent.type === AST_NODE_TYPES.MethodDefinition ||

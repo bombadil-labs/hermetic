@@ -31,7 +31,9 @@ describe("docs/rules/sealed.md", () => {
       "freeVariable",
       "freeVariable",
       "lexicalThis",
-      "method",
+      "privateName",
+      "superReference",
+      "freeVariable",
       "importMeta",
       "jsx",
     ]);

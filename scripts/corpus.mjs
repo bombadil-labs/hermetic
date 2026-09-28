@@ -45,7 +45,7 @@ import { analyze, createEnvironment, isAmbient } from "../packages/eslint-plugin
 import plugin from "../packages/eslint-plugin-hermetic/src/index.ts";
 import { planLift, tryLift } from "../packages/eslint-plugin-hermetic/src/lift.ts";
 import { unlift } from "../packages/eslint-plugin-hermetic/src/unlift.ts";
-import { functionName, isFunctionNode, isMarkedHermetic, isMethod } from "../packages/eslint-plugin-hermetic/src/marking.ts";
+import { className, functionName, isFunctionNode, isMarkedHermetic, isMethod } from "../packages/eslint-plugin-hermetic/src/marking.ts";
 import { isCandidate } from "../packages/eslint-plugin-hermetic/src/rules/prefer-hermetic.ts";
 import { check } from "@bombadil/hermetic";
 import { toLiteralContexts } from "./literal-contexts.mjs";
@@ -201,15 +201,16 @@ function runStress() {
 const CONSTRUCTS = { lexicalThis: "this", superReference: "super", lexicalNewTarget: "new.target", importMeta: "import.meta", dynamicImport: "import()" };
 
 /**
- * Checks every function in the published JavaScript twice: with sealed, as if
- * it were marked, and with check() on the text Function.prototype.toString
- * gives for it. Both must report the same problems at the same places, except
- * where sealed sees the module around the function and check() by design
- * cannot: a function declaration whose own name the module reassigns. Neither
- * can mark a method or a class, so check() must refuse every one.
+ * Checks every function, method and class in the published JavaScript twice:
+ * with sealed, as if it were marked, and with check() on the text
+ * Function.prototype.toString gives for it. Both must report the same
+ * problems at the same places, except where sealed sees the module around the
+ * function and check() by design cannot: a function declaration whose own
+ * name the module reassigns. A method's `this` is its object, and a class is
+ * checked whole, as marking its constructor marks it.
  */
 function runCrosscheck() {
-  const tally = { files: 0, functions: 0, methods: 0, constructors: 0, hermetic: 0, same: 0, agreed: {}, classes: 0 };
+  const tally = { files: 0, functions: 0, methods: 0, methodsHermetic: 0, constructors: 0, hermetic: 0, same: 0, agreed: {}, classes: 0, classesHermetic: 0 };
   const moduleOnly = [];
   const differing = [];
   const oracle = {
@@ -220,14 +221,43 @@ function runCrosscheck() {
           const env = createEnvironment(context, {});
           const text = context.sourceCode.text;
           const file = path.relative(path.join(root, "published"), context.filename).split(path.sep).join("/");
+          /** Compares what sealed finds in `node` with what check() finds in `source`, which starts at `start`. */
+          const compare = (node, name, start, source, counts) => {
+            const at = (node, from = start) => `@${node.range[0] - from}-${node.range[1] - from}`;
+            const expected = analyze(node, name, env).map((problem) => ({
+                kind: problem.messageId,
+                key: `${problem.messageId}:${problem.data.name ?? problem.data.path ?? CONSTRUCTS[problem.messageId]}${at(problem.node)}`,
+                reference: problem.reference,
+              }));
+            const actual = check(source).problems.map((problem) => `${problem.kind}:${problem.name}@${problem.start}-${problem.end}`);
+            const missing = [...actual];
+            const extra = [];
+            for (const { key } of expected) {
+              const index = missing.indexOf(key);
+              if (index === -1) extra.push(key);
+              else missing.splice(index, 1);
+            }
+            if (extra.length === 0 && missing.length === 0) {
+              if (expected.length === 0) counts.hermetic();
+              else tally.same++;
+              for (const { kind } of expected) tally.agreed[kind] = (tally.agreed[kind] ?? 0) + 1;
+              return;
+            }
+            const record = { file, line: node.loc.start.line, name, sealedOnly: extra, checkOnly: missing, source: source.length > 400 ? `${source.slice(0, 400)}...` : source };
+            // A problem only the module can show: a declaration's own name read as a free variable, because the module reassigns it.
+            const seesModule = (problem) =>
+              problem.kind === "freeVariable" && node.type === "FunctionDeclaration" && problem.reference.resolved?.defs.some((def) => def.node === node);
+            const explained = new Set(expected.filter(seesModule).map((problem) => problem.key));
+            if (missing.length === 0 && extra.every((key) => explained.has(key))) moduleOnly.push(record);
+            else differing.push(record);
+          };
           return {
-            // A class can't be hermetic yet, and check() must read every one as a class and refuse it.
+            // A class is checked whole, as a marked constructor marks it: check() reads its source as a class.
             "ClassDeclaration, ClassExpression"(node) {
               tally.classes++;
-              const result = check(text.slice(node.range[0], node.range[1]));
-              if (result.form !== "class" || result.problems.length !== 1 || result.problems[0].kind !== "method") {
-                differing.push({ file, line: node.loc.start.line, name: node.id?.name, class: true, problems: result.problems });
-              }
+              const source = text.slice(node.range[0], node.range[1]);
+              if (check(source).form !== "class") return void differing.push({ file, line: node.loc.start.line, name: className(node), class: true, notAClass: true });
+              compare(node, className(node), node.range[0], source, { hermetic: () => tally.classesHermetic++ });
             },
             ":function"(node) {
               const parent = node.parent;
@@ -239,40 +269,12 @@ function runCrosscheck() {
               let [start, end] = method ? parent.range : node.range;
               // A static method's source starts after `static`.
               if (parent.type === "MethodDefinition" && parent.static) start += /^static\b\s*/.exec(text.slice(start, end))[0].length;
-              const source = text.slice(start, end);
-              // Neither can mark a method: sealed reports a marked one, and check() refuses its source.
-              if (method) {
-                const refused = check(source).problems;
-                if (refused.length === 1 && refused[0].kind === "method") return void (tally.agreed.method = (tally.agreed.method ?? 0) + 1);
-                return void differing.push({ file, line: node.loc.start.line, name: functionName(node), checkOnly: refused.map((p) => `${p.kind}:${p.name}`), source });
-              }
-              const at = (node, from = start) => `@${node.range[0] - from}-${node.range[1] - from}`;
-              const expected = analyze(node, functionName(node), env).map((problem) => ({
-                kind: problem.messageId,
-                key: `${problem.messageId}:${problem.data.name ?? problem.data.path ?? CONSTRUCTS[problem.messageId]}${at(problem.node)}`,
-                reference: problem.reference,
-              }));
-              const actual = check(source).problems.map((problem) => `${problem.kind}:${problem.name}@${problem.start}-${problem.end}`);
-              const missing = [...actual];
-              const extra = [];
-              for (const { key } of expected) {
-                const index = missing.indexOf(key);
-                if (index === -1) extra.push(key);
-                else missing.splice(index, 1);
-              }
-              if (extra.length === 0 && missing.length === 0) {
-                if (expected.length === 0) tally.hermetic++;
-                else tally.same++;
-                for (const { kind } of expected) tally.agreed[kind] = (tally.agreed[kind] ?? 0) + 1;
-                return;
-              }
-              const record = { file, line: node.loc.start.line, name: functionName(node), sealedOnly: extra, checkOnly: missing, source: source.length > 400 ? `${source.slice(0, 400)}...` : source };
-              // A problem only the module can show: a declaration's own name read as a free variable, because the module reassigns it.
-              const seesModule = (problem) =>
-                problem.kind === "freeVariable" && node.type === "FunctionDeclaration" && problem.reference.resolved?.defs.some((def) => def.node === node);
-              const explained = new Set(expected.filter(seesModule).map((problem) => problem.key));
-              if (missing.length === 0 && extra.every((key) => explained.has(key))) moduleOnly.push(record);
-              else differing.push(record);
+              compare(node, functionName(node), start, text.slice(start, end), {
+                hermetic: () => {
+                  tally.hermetic++;
+                  if (method) tally.methodsHermetic++;
+                },
+              });
             },
           };
         },
@@ -298,11 +300,12 @@ function runCrosscheck() {
   const row = (label, n) => console.log(`  ${String(n).padStart(6)}  ${label}`);
   console.log(`\nCrosscheck: ${tally.functions} functions, ${tally.methods} of them methods, in ${tally.files} files of published JavaScript, in ${seconds}s`);
   row("hermetic, by both", tally.hermetic);
+  row("  of them methods", tally.methodsHermetic);
   row("the same problems at the same places", tally.same);
   row("differ only where sealed sees the module: a declaration whose own name the module reassigns", moduleOnly.length);
   row("differ otherwise", differing.length);
   console.log(`  (and ${tally.constructors} class constructors, whose source is their whole class)`);
-  console.log(`  Classes, each refused as a class unless listed below: ${tally.classes}`);
+  console.log(`  Classes, checked whole: ${tally.classes}, hermetic by both: ${tally.classesHermetic}`);
   console.log(`  Problems both found: ${Object.entries(tally.agreed).sort((a, b) => b[1] - a[1]).map(([kind, n]) => `${n} ${kind}`).join(", ")}`);
   for (const record of differing.slice(0, 10)) console.log(`\n  ${record.file}:${record.line} ${record.name ?? ""}\n    sealed only: ${record.sealedOnly?.join(", ") || "-"}\n    check only:  ${record.checkOnly?.join(", ") || record.fatal || "-"}`);
   fs.mkdirSync(resultsDir, { recursive: true });
@@ -751,6 +754,22 @@ const EXAMPLES = {
   ],
 };
 
+/** How many methods each kind of problem stops, for methods that aren't hermetic yet. */
+function blockersOf(records) {
+  const names = ["reads a module-level name", "reads a global"];
+  const kinds = (record) => Object.keys(record.blockers);
+  const only = (...allowed) => records.filter((record) => kinds(record).every((kind) => allowed.includes(kind))).length;
+  const any = (kind) => records.filter((record) => kinds(record).includes(kind)).length;
+  return {
+    onlyNames: only(...names),
+    onlyModuleNames: only(names[0]),
+    onlyGlobals: only(names[1]),
+    privateName: any("privateName"),
+    superReference: any("superReference"),
+    other: records.filter((record) => kinds(record).some((kind) => !names.includes(kind) && kind !== "privateName" && kind !== "superReference")).length,
+  };
+}
+
 const libraryOf = (file) => LIBRARIES.find((library) => library.sources.some((source) => file.startsWith(source + "/") || file.startsWith(source + path.sep)));
 
 /**
@@ -760,8 +779,10 @@ const libraryOf = (file) => LIBRARIES.find((library) => library.sources.some((so
  * counted as settled. A shared lift records whether it is shared only
  * because it reads a global. An outermost function bound to no name, such
  * as a callback passed to another function, is not a candidate; it is
- * recorded as unnamed, with the function it is passed to. Nor is a method,
- * which can't be hermetic yet; an outermost one is recorded as a method.
+ * recorded as unnamed, with the function it is passed to. A method is a
+ * candidate for marking but not for the lift, which has nowhere to put what it
+ * lifts while the method's `this` is its object; one that isn't hermetic yet
+ * records what stops it. Each outermost class is recorded whole.
  */
 function censusRecords() {
   const records = [];
@@ -792,19 +813,39 @@ function censusRecords() {
           const env = createEnvironment(context, {});
           const file = path.relative(original, context.filename).split(path.sep).join("/");
           return {
+            // An outermost class, which is hermetic if everything in it is, as marking it would check.
+            "ClassDeclaration, ClassExpression"(node) {
+              if (node.declare) return;
+              for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) {
+                if (isFunctionNode(ancestor) || ancestor.type === "ClassDeclaration" || ancestor.type === "ClassExpression") return;
+              }
+              const hermetic = analyze(node, className(node), env).length === 0;
+              records.push({ file, name: className(node), line: node.loc.start.line, outcome: "class", hermetic });
+            },
             ":function"(node) {
               if (!isCandidate(node)) {
                 for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) if (isFunctionNode(ancestor)) return;
-                if (isMethod(node)) return void records.push({ file, name: functionName(node), line: node.loc.start.line, outcome: "method" });
+                // A constructor is part of its class, counted above.
+                if (isMethod(node)) return;
                 const callee = node.parent.type === "CallExpression" ? node.parent.callee : undefined;
                 const passedTo = callee?.type === "Identifier" ? callee.name : callee?.type === "MemberExpression" && !callee.computed ? callee.property.name : undefined;
                 return void records.push({ file, line: node.loc.start.line, outcome: "unnamed", passedTo });
               }
               if (isMarkedHermetic(node, context.sourceCode)) return;
               const problems = analyze(node, functionName(node), env);
-              const member = node.parent.type === "Property";
-              const record = { file, name: functionName(node), line: node.loc.start.line, member };
+              const method = isMethod(node);
+              const member = node.parent.type === "Property" && !method;
+              const record = { file, name: functionName(node), line: node.loc.start.line, member, ...(method && { method }) };
               if (problems.length === 0) return void records.push({ ...record, outcome: "hermetic" });
+              if (method) {
+                // What stops the method: each kind of problem, with each free variable counted by the kind of name it reads.
+                const blockers = {};
+                for (const problem of problems) {
+                  const kind = problem.messageId === "freeVariable" ? `reads ${kindOf(problem.reference) === "global" ? "a global" : "a module-level name"}` : problem.messageId;
+                  blockers[kind] = (blockers[kind] ?? 0) + 1;
+                }
+                return void records.push({ ...record, outcome: "method", blockers });
+              }
               const result = tryLift(node, problems, env);
               if (typeof result !== "string") {
                 if (!result.contextName) return void records.push({ ...record, outcome: "direct" });
@@ -904,9 +945,13 @@ function runReport() {
       name: library.name,
       packages: library.packages.map((name) => ({ name, version: PACKAGES[name] })),
       files: fixedFiles.length,
-      candidates: count((r) => r.outcome !== "unnamed" && r.outcome !== "method"),
-      methods: count((r) => r.outcome === "method"),
-      hermetic: count((r) => r.outcome === "hermetic"),
+      candidates: count((r) => !r.method && r.outcome !== "unnamed" && r.outcome !== "method" && r.outcome !== "class"),
+      methods: count((r) => r.method),
+      hermeticMethods: count((r) => r.method && r.outcome === "hermetic"),
+      methodBlockers: blockersOf(mine.filter((r) => r.outcome === "method")),
+      classes: count((r) => r.outcome === "class"),
+      hermeticClasses: count((r) => r.outcome === "class" && r.hermetic),
+      hermetic: count((r) => !r.method && r.outcome === "hermetic"),
       hermeticMembers: count((r) => r.outcome === "hermetic" && r.member),
       direct: count((r) => r.outcome === "direct"),
       shared: count((r) => r.outcome === "shared"),

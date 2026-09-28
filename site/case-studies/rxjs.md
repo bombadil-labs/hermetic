@@ -7,7 +7,7 @@ description: What prefer-hermetic did to RxJS {{rxjs.version}}, and why it skipp
 
 <p class="lede">RxJS is a library for reactive programming with observables. The lift rewrote {{rxjs.lifted}} of its {{rxjs.candidates}} functions and skipped {{rxjs.skipped}}. This case study is mostly about the skipped ones: why the lift won't rewrite a function unless it can prove the rewrite is safe, and what that costs.</p>
 
-It covers the TypeScript source that RxJS {{rxjs.version}} publishes to npm: {{rxjs.files}} files and {{rxjs.candidates}} candidate functions, not counting the {{rxjs.methods}} methods of its classes. A method's `this` is its object, not its inputs, so methods can't be hermetic yet.
+It covers the TypeScript source that RxJS {{rxjs.version}} publishes to npm: {{rxjs.files}} files and {{rxjs.candidates}} candidate functions, not counting the {{rxjs.methods}} methods of its classes, which are counted on their own, [below](#methods).
 
 ## Results
 
@@ -54,6 +54,12 @@ npx eslint --fix --rule '{"hermetic/prefer-hermetic": ["warn", {"lift": true, "i
 ```
 
 It is off by default, because the lift can't see those two cases coming: only the people who know the code can say that no import cycle calls a function early, and that no exported `let` changes while a function runs.
+
+## Methods
+
+{{rxjs.hermeticMethods}} of RxJS's {{rxjs.methods}} methods are already hermetic, and the fix marks them, such as the `next` of `AnonymousSubject`, which calls `this.destination?.next?.(value)`. The lift doesn't rewrite methods yet.
+
+Of the other {{rxjs.otherMethods}}, {{rxjs.methodsSuper}} call `super`, which a hermetic method can't. Most are in subjects, subscribers and scheduler actions that extend a base class, such as `BehaviorSubject`'s `next`, which calls `super.next`. `super` means the class the method was written in, so the same method would do something else on any other class. {{rxjs.methodsOnlyNames}} read nothing else but module-level names and globals.
 
 ## Everything skipped
 

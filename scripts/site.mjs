@@ -64,6 +64,14 @@ function libraryValues(id) {
     sharedForGlobals: count(l.sharedForGlobals),
     methods: count(l.methods),
     methodsPctOfNamed: percent(l.methods, l.methods + l.candidates),
+    hermeticMethods: count(l.hermeticMethods),
+    hermeticMethodsPct: percent(l.hermeticMethods, l.methods),
+    otherMethods: count(l.methods - l.hermeticMethods),
+    methodsOnlyNames: count(l.methodBlockers.onlyNames),
+    methodsPrivate: count(l.methodBlockers.privateName),
+    methodsSuper: count(l.methodBlockers.superReference),
+    classes: count(l.classes),
+    hermeticClasses: count(l.hermeticClasses),
     skipped: count(l.skipped),
     skippedPct: percent(l.skipped, l.candidates),
     members: count(reason(MEMBERS)),
@@ -105,8 +113,10 @@ const totals = data.libraries.reduce(
     hermetic: sum.hermetic + l.hermetic,
     lifted: sum.lifted + l.direct + l.shared,
     typeErrorsIntroduced: sum.typeErrorsIntroduced + l.validation.typeErrorsIntroduced,
+    methods: sum.methods + l.methods,
+    hermeticMethods: sum.hermeticMethods + l.hermeticMethods,
   }),
-  { candidates: 0, hermetic: 0, lifted: 0, typeErrorsIntroduced: 0 },
+  { candidates: 0, hermetic: 0, lifted: 0, typeErrorsIntroduced: 0, methods: 0, hermeticMethods: 0 },
 );
 
 const values = {
@@ -121,6 +131,9 @@ const values = {
     lifted: count(totals.lifted),
     liftedPct: percent(totals.lifted, totals.candidates),
     typeErrorsIntroduced: count(totals.typeErrorsIntroduced),
+    methods: count(totals.methods),
+    hermeticMethods: count(totals.hermeticMethods),
+    hermeticMethodsPct: percent(totals.hermeticMethods, totals.methods),
   },
 };
 

@@ -1,11 +1,11 @@
 import * as tsParser from "@typescript-eslint/parser";
 import { Linter } from "eslint";
 import { describe, expect, it } from "vitest";
-import { analyze, createEnvironment } from "../src/analysis.ts";
+import { analyze, createAnalysis } from "../src/analysis.ts";
 import { type LiftAssumptions, tryLift } from "../src/lift.ts";
 import { type FunctionNode, functionName } from "../src/marking.ts";
 import { isCandidate } from "../src/rules/prefer-hermetic.ts";
-import { createRule } from "../src/rules/sealed.ts";
+import { createRule } from "../src/rules/create-rule.ts";
 
 /** What `tryLift` decides for each candidate in `code` that is not hermetic already: how it lifts, or why not. */
 function decisions(code: string, assumptions?: LiftAssumptions, filename = "module.ts"): Record<string, string> {
@@ -15,13 +15,13 @@ function decisions(code: string, assumptions?: LiftAssumptions, filename = "modu
     meta: { type: "suggestion", docs: { description: "Records what tryLift decides" }, schema: [], messages: {} },
     defaultOptions: [],
     create(context) {
-      const env = createEnvironment(context, {});
+      const analysis = createAnalysis(context, {});
       return {
         ":function"(node: FunctionNode) {
           if (!isCandidate(node)) return;
-          const problems = analyze(node, functionName(node), env);
+          const problems = analyze(node, functionName(node), analysis);
           if (problems.length === 0) return;
-          const result = tryLift(node, problems, env, assumptions);
+          const result = tryLift(node, problems, analysis, assumptions);
           found[functionName(node)] = typeof result === "string" ? result : result.contextName ? "shared context" : "direct";
         },
       };

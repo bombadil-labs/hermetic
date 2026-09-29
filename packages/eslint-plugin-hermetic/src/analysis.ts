@@ -28,8 +28,8 @@ export interface Problem {
   readonly reference?: Reference;
 }
 
-/** What "hermetic" means for a lint run. */
-export interface Environment {
+/** What "hermetic" means for a lint run: the file, and the options that decide it. */
+export interface Analysis {
   readonly sourceCode: Readonly<TSESLint.SourceCode>;
   readonly structuralOnly: boolean;
 }
@@ -48,13 +48,13 @@ export const SETTINGS_SCHEMA: Record<keyof HermeticSettings, JSONSchema4> = {
 };
 
 /**
- * Resolves the environment for one file: rule options win over
+ * Resolves the analysis for one file: rule options win over
  * `settings.hermetic`, which wins over the defaults.
  */
-export function createEnvironment(
+export function createAnalysis(
   context: Readonly<TSESLint.RuleContext<string, readonly unknown[]>>,
   options: HermeticSettings,
-): Environment {
+): Analysis {
   const settings = readSettings(context.settings);
   return {
     sourceCode: context.sourceCode,
@@ -90,19 +90,19 @@ function readSettings(settings: Record<string, unknown>): HermeticSettings {
  * object, one of its inputs, as a function's `this` is. A class is analyzed
  * whole: its heritage, fields, static blocks and methods.
  */
-export function analyze(fn: FunctionNode | ClassNode, name: string, env: Environment): Problem[] {
-  return [...referenceProblems(fn, name, env), ...escapeProblems(fn, name, env)];
+export function analyze(fn: FunctionNode | ClassNode, name: string, analysis: Analysis): Problem[] {
+  return [...referenceProblems(fn, name, analysis), ...escapeProblems(fn, name, analysis)];
 }
 
-function referenceProblems(fn: FunctionNode | ClassNode, fnName: string, env: Environment): Problem[] {
+function referenceProblems(fn: FunctionNode | ClassNode, fnName: string, analysis: Analysis): Problem[] {
   const problems: Problem[] = [];
-  const scope = env.sourceCode.scopeManager?.acquire(fn);
+  const scope = analysis.sourceCode.scopeManager?.acquire(fn);
   if (!scope) return problems;
   for (const reference of scope.through) {
     const identifier = reference.identifier;
     const data = { name: identifier.name, fn: fnName };
     if (isTypeOnly(reference, fn)) {
-      if (env.structuralOnly && isDeclared(reference.resolved)) {
+      if (analysis.structuralOnly && isDeclared(reference.resolved)) {
         problems.push({ node: identifier, messageId: "typeReference", data, reference });
       }
       continue;
@@ -116,7 +116,7 @@ function referenceProblems(fn: FunctionNode | ClassNode, fnName: string, env: En
 }
 
 /** `this`, `super`, `new.target`, private names, `import.meta`, `import()` and JSX that reach outside `fn`. */
-function escapeProblems(fn: FunctionNode | ClassNode, fnName: string, env: Environment): Problem[] {
+function escapeProblems(fn: FunctionNode | ClassNode, fnName: string, analysis: Analysis): Problem[] {
   const problems: Problem[] = [];
   const data = { fn: fnName };
   const visit = (node: TSESTree.Node): void => {
@@ -148,7 +148,7 @@ function escapeProblems(fn: FunctionNode | ClassNode, fnName: string, env: Envir
       default:
         break;
     }
-    for (const child of childNodes(node, env.sourceCode.visitorKeys)) visit(child);
+    for (const child of childNodes(node, analysis.sourceCode.visitorKeys)) visit(child);
   };
   visit(fn);
   return problems;
@@ -250,7 +250,7 @@ export function isTypeOnly(reference: Reference, fn: FunctionNode | ClassNode): 
  * A function declaration may call itself by name. The toString round trip
  * turns the declaration into a named function expression, which binds its own
  * name, so the reference survives relocation. That holds only while the
- * binding is never reassigned.
+ * name is never reassigned.
  */
 function isOwnName(reference: Reference, fn: FunctionNode | ClassNode): boolean {
   const variable = reference.resolved;
@@ -268,7 +268,7 @@ function isDeclared(variable: Variable | null): boolean {
 }
 
 /**
- * True when a global's name resolves to a real binding in an enclosing scope
+ * True when a global's name resolves to a declaration in an enclosing scope
  * rather than the global. Ambient `declare` statements only describe globals.
  */
 function isShadowed(variable: Variable | null): boolean {

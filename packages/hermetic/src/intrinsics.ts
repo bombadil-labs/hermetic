@@ -1,5 +1,5 @@
 /**
- * The deterministic built-ins a binding can hand a hermetic function, such as
+ * The deterministic built-ins that binding code can hand a hermetic function, such as
  * `Array`, `JSON` and `Math`, which it can't read by name.
  */
 export interface Intrinsics {
@@ -34,7 +34,7 @@ export interface Intrinsics {
 }
 
 /**
- * Picks the deterministic built-ins out of `realm`, for bindings to pass
+ * Picks the deterministic built-ins out of `realm`, for binding code to pass
  * through `this`. Left out: `Math.random`; `Date`, which reads the clock;
  * `Intl`, which depends on the host's locale; and everything that reaches the
  * host or loads code, such as `fetch`, `console`, timers, `eval` and

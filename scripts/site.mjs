@@ -95,7 +95,7 @@ function suiteValues(result, label) {
 }
 
 /**
- * check() against hermetic/sealed on the published JavaScript. The site says
+ * check() against hermetic/no-hidden-inputs on the published JavaScript. The site says
  * they agree on every function, so any difference fails the build, including
  * one only the module around a function can show.
  */
@@ -103,7 +103,7 @@ function crosscheckValues() {
   const c = data.crosscheck;
   if (!c) throw new Error("corpus.json has no crosscheck results: run npm run corpus -- report");
   const differing = c.differing + c.moduleOnly.length;
-  if (differing !== 0) throw new Error(`The crosscheck found ${differing} differences between check() and hermetic/sealed, and the site says there are none`);
+  if (differing !== 0) throw new Error(`The crosscheck found ${differing} differences between check() and hermetic/no-hidden-inputs, and the site says there are none`);
   return { functions: count(c.functions), methods: count(c.methods), classes: count(c.classes) };
 }
 

@@ -1,6 +1,6 @@
 # @bombadil/eslint-plugin-hermetic
 
-**A hermetic function reads nothing but its inputs: its arguments, including `this`.** It doesn't use imports, module-level variables or globals, not even built-ins such as `Math`; anything it needs is passed in. `hermetic/sealed` checks the functions you mark as hermetic, and `hermetic/prefer-hermetic` finds functions that already are, and rewrites others so they can be.
+**A hermetic function reads nothing but its inputs: its arguments, including `this`.** It doesn't use imports, module-level variables or globals, not even built-ins such as `Math`; anything it needs is passed in. `hermetic/no-hidden-inputs` checks the functions you mark as hermetic, and `hermetic/prefer-hermetic` finds functions that already are, and rewrites others so they can be.
 
 ```ts
 function applyDiscount(this: Pricing, invoice: Invoice) {
@@ -36,14 +36,14 @@ export default defineConfig(
 );
 ```
 
-`hermetic/sealed` only checks functions marked hermetic, so turning it on doesn't affect the rest of your code. Both rules also work on plain JavaScript through ESLint's default parser.
+`hermetic/no-hidden-inputs` only checks functions marked hermetic, so turning it on doesn't affect the rest of your code. Both rules also work on plain JavaScript through ESLint's default parser.
 
 | Rule | What it does | Fix |
 | --- | --- | --- |
-| [`hermetic/sealed`](https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/sealed.md) | Reports the hidden inputs of functions marked hermetic. In the recommended config. | |
+| [`hermetic/no-hidden-inputs`](https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/no-hidden-inputs.md) | Reports the hidden inputs of functions marked hermetic. In the recommended config. | |
 | [`hermetic/prefer-hermetic`](https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/prefer-hermetic.md) | Reports functions that are already hermetic, and with `lift`, functions it can rewrite to be hermetic. | Marks, or lifts |
 
-**Moving from `@bombadil/hermetic` 0.2.** Up to 0.2.0, the rules were published as `@bombadil/hermetic`. Install `@bombadil/eslint-plugin-hermetic` instead, and change the import in `eslint.config.js`. Two things changed with it. Hermetic functions read no globals now, not even built-ins, so the `ground` and `aliasing` settings are gone. And a hermetic method can't use its class's private names, such as `#count`, since it would then work only inside that class.
+**Moving from `@bombadil/hermetic` 0.2.** Up to 0.2.0, the rules were published as `@bombadil/hermetic`. Install `@bombadil/eslint-plugin-hermetic` instead, and change the import in `eslint.config.js`. Three things changed with it. `hermetic/sealed` is now `hermetic/no-hidden-inputs`; the old name still works in 0.3, and is deprecated. Hermetic functions read no globals now, not even built-ins, so the `ground` and `aliasing` settings are gone. And a hermetic method can't use its class's private names, such as `#count`, since it would then work only inside that class.
 
 ## Marking a function
 
@@ -71,7 +71,7 @@ Both forms apply to function declarations, function expressions, arrow functions
 
 A method's `this` is the object it's called on, one of its inputs, so a method can be hermetic: it reads nothing but its arguments and its object. It can't use what only its class can reach, such as `super` or the class's private names, so it works on any object that has what it reads. [`methods`](https://github.com/bombadil-labs/hermetic/tree/main/packages/hermetic#methods) in `@bombadil/hermetic` builds a class out of standalone hermetic functions, each of which can be tested alone.
 
-A whole class can be hermetic too. Mark its constructor, or put an `@hermetic` tag in a JSDoc block before the class, and `hermetic/sealed` checks everything in it as one function: field initializers, static blocks and methods included. Its `super` and private names are then its own.
+A whole class can be hermetic too. Mark its constructor, or put an `@hermetic` tag in a JSDoc block before the class, and `hermetic/no-hidden-inputs` checks everything in it as one function: field initializers, static blocks and methods included. Its `super` and private names are then its own.
 
 ```ts
 class Tally {
@@ -88,7 +88,7 @@ class Tally {
 
 ## What the rule reports
 
-`hermetic/sealed` reports every hidden input of a marked function: each name it uses that isn't declared inside it. It also reports the forms that scope analysis can't see:
+`hermetic/no-hidden-inputs` reports every hidden input of a marked function: each name it uses that isn't declared inside it. It also reports the forms that scope analysis can't see:
 
 | Reported | Example | Why |
 | --- | --- | --- |
@@ -171,7 +171,7 @@ See [`examples/pricing.ts`](https://github.com/bombadil-labs/hermetic/blob/main/
 
 ## Making a codebase hermetic
 
-`hermetic/prefer-hermetic` finds functions that are already hermetic and marks them. With `lift`, it also rewrites functions whose hidden inputs are all module-level values or globals, built-ins such as `Math` included: the body moves into a new hermetic function that receives them through `this`, and the original function becomes a wrapper that passes them in.
+`hermetic/prefer-hermetic` finds functions that are already hermetic and marks them. With `lift`, it also rewrites functions whose hidden inputs are all module-level values or globals, built-ins such as `Math` included: the body moves into a new hermetic function, the core, which receives them through `this`, and the original function becomes a wrapper that passes them in.
 
 ```ts
 // before

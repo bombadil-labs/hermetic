@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import plugin from "../src/index.ts";
 import { repoRoot } from "./helpers.ts";
 
-const doc = fs.readFileSync(path.join(repoRoot, "docs/rules/sealed.md"), "utf8");
+const doc = fs.readFileSync(path.join(repoRoot, "docs/rules/no-hidden-inputs.md"), "utf8");
 const [incorrect, correct] = [...doc.matchAll(/```ts\n([\s\S]*?)```/g)].map((match) => match[1] ?? "");
 
 const lint = (code: string) =>
@@ -17,13 +17,13 @@ const lint = (code: string) =>
         files: ["**/*.tsx"],
         languageOptions: { parser: tsParser as Linter.Parser },
         plugins: { hermetic: plugin },
-        rules: { "hermetic/sealed": "error" },
+        rules: { "hermetic/no-hidden-inputs": "error" },
       },
     ],
     { filename: "doc.tsx" },
   );
 
-describe("docs/rules/sealed.md", () => {
+describe("docs/rules/no-hidden-inputs.md", () => {
   it("reports exactly one problem per incorrect example", () => {
     expect(lint(incorrect ?? "").map((message) => message.messageId ?? message.message)).toEqual([
       "freeVariable",
@@ -56,7 +56,7 @@ describe("docs/rules/prefer-hermetic.md", () => {
           files: ["**/*.ts"],
           languageOptions: { parser: tsParser as Linter.Parser },
           plugins: { hermetic: plugin },
-          rules: { "hermetic/prefer-hermetic": ["error", { lift: true }], "hermetic/sealed": "error" },
+          rules: { "hermetic/prefer-hermetic": ["error", { lift: true }], "hermetic/no-hidden-inputs": "error" },
         },
       ],
       { filename: "doc.ts" },

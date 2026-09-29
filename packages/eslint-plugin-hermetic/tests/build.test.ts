@@ -110,7 +110,7 @@ describe("unliftPlugin", () => {
     expect(transform(unlifter, lifted, "/app/src/price.test.ts").result).toBeNull();
   });
 
-  it("warns about each binding that stays lifted, and why", () => {
+  it("warns about each wrapper that stays lifted, and why", () => {
     const shared = `${lifted}export const test = () => priceHermetic.call({ RATE: 1 }, 1);\n`;
     const { result, warnings } = transform(unliftPlugin(), shared, "/app/src/price.ts");
     expect(result).toBeNull();

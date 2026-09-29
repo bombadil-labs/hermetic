@@ -1,6 +1,6 @@
 import { parse } from "acorn";
 import { describe, expect, it } from "vitest";
-import { check, type CheckContext, checkHermetic, IMMUTABLE_GLOBALS } from "../src/index.ts";
+import { check, type CheckEnvironment, checkHermetic, IMMUTABLE_GLOBALS } from "../src/index.ts";
 
 /** Each problem as `kind:name`, in source order. */
 function problems(source: string): string[] {
@@ -170,8 +170,8 @@ describe("check: names", () => {
     ["arguments in a function", "function () { return arguments.length }"],
     ["a class and its name inside itself", "() => { class A { static make() { return new A() } } return A }"],
     ["catch parameters", "() => { try { return 1 } catch ({ message }) { return message } }"],
-    ["loop bindings", "(xs) => { for (const [k, v] of xs) k + v; for (let i = 0; i < 1; i++) i; for (var j in xs) j; return j }"],
-    ["switch case bindings", "(n) => { switch (n) { case 1: let m = n; return m } }"],
+    ["loop variables", "(xs) => { for (const [k, v] of xs) k + v; for (let i = 0; i < 1; i++) i; for (var j in xs) j; return j }"],
+    ["switch case declarations", "(n) => { switch (n) { case 1: let m = n; return m } }"],
     ["labels", "() => { outer: for (;;) { break outer } }"],
     ["object keys and member names", "(o) => ({ key: o.prop, [o.dynamic]: 1 }).key"],
     ["a var inside a static block", "() => class { static { var hidden = 1; hidden } }"],
@@ -315,7 +315,7 @@ describe("check: offsets", () => {
 });
 
 describe("checkHermetic", () => {
-  const context: CheckContext = {
+  const env: CheckEnvironment = {
     parse: (source, sourceType) => parse(source, { ecmaVersion: "latest", sourceType, checkPrivateFields: false }),
   };
 
@@ -326,15 +326,15 @@ describe("checkHermetic", () => {
   it("works when evaluated from its source alone and bound to a parser", () => {
     const relocated = new Function(`return ${Function.prototype.toString.call(checkHermetic)}`)() as typeof checkHermetic;
     const sources = ["() => Math.max(1) + y", "m() { return super.m(this) }", "x => x), (y => y", "function (a { }"];
-    for (const source of sources) expect(relocated.call(context, source)).toEqual(check(source));
+    for (const source of sources) expect(relocated.call(env, source)).toEqual(check(source));
   });
 
   it("uses whatever parser it is given", () => {
     const seen: string[] = [];
-    const tracing: CheckContext = {
+    const tracing: CheckEnvironment = {
       parse: (source, sourceType) => {
         seen.push(sourceType);
-        return context.parse(source, sourceType);
+        return env.parse(source, sourceType);
       },
     };
     expect(checkHermetic.call(tracing, "function (o) { with (o) {} }")).toMatchObject({ hermetic: false });

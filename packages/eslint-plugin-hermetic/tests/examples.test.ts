@@ -15,7 +15,7 @@ const relocate = <F extends Function>(fn: F): F => new Function(`return (${fn.to
 describe("the pricing example", () => {
   const invoice = { id: "inv-1", total: 100 };
 
-  it("binds authority in the binding layer", () => {
+  it("binds authority in binding code", () => {
     const { price, checkout: total } = bindPricing({ discountRate: 0.1 });
     expect(price(invoice)).toEqual({ id: "inv-1", total: 90 });
     expect(total([invoice, { id: "inv-2", total: 50.555 }])).toBe(135.5);
@@ -53,7 +53,7 @@ describe("the examples", () => {
         files: ["**/*.ts"],
         languageOptions: { parser: tsParser as Linter.Parser },
         plugins: { hermetic: plugin as never },
-        rules: { "hermetic/sealed": "error" },
+        rules: { "hermetic/no-hidden-inputs": "error" },
       },
     ];
     const eslint = new ESLint({ cwd: repoRoot, overrideConfigFile: true, overrideConfig: config });

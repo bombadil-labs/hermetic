@@ -16,7 +16,7 @@ export const IMMUTABLE_GLOBALS: readonly string[] = ["undefined", "NaN", "Infini
 export type Parse = (source: string, sourceType: "module" | "script") => unknown;
 
 /** What `checkHermetic` receives as `this`. */
-export interface CheckContext {
+export interface CheckEnvironment {
   readonly parse: Parse;
 }
 
@@ -105,7 +105,7 @@ const parseWithAcorn: Parse = (source, sourceType) =>
  * nested inside it, and it reads no globals, so its source is complete on its
  * own and can be evaluated and bound in any runtime.
  */
-export function checkHermetic(this: CheckContext, source: string): CheckResult {
+export function checkHermetic(this: CheckEnvironment, source: string): CheckResult {
   "use hermetic";
   const parse = this.parse;
   const immutable = ["undefined", "NaN", "Infinity"];

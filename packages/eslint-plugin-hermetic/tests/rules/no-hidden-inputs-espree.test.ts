@@ -1,10 +1,10 @@
 import { type Rule, RuleTester } from "eslint";
-import { sealed } from "../../src/rules/sealed.ts";
+import { noHiddenInputs } from "../../src/rules/no-hidden-inputs.ts";
 
 // Plain JavaScript through ESLint's default parser and eslint-scope.
 const ruleTester = new RuleTester({ languageOptions: { ecmaVersion: "latest", sourceType: "module" } });
 
-ruleTester.run("sealed with espree", sealed as unknown as Rule.RuleModule, {
+ruleTester.run("no-hidden-inputs with espree", noHiddenInputs as unknown as Rule.RuleModule, {
   valid: [
     { code: `const o = { m() { "use hermetic"; return this.x; } };` },
     { code: `class C { #x = 0; constructor() { "use hermetic"; } get x() { return this.#x; } }` },

@@ -1,34 +1,33 @@
-import { ESLintUtils, type TSESLint, type TSESTree } from "@typescript-eslint/utils";
-import { analyze, createEnvironment, type HermeticSettings, type MessageIds, SETTINGS_SCHEMA } from "../analysis.ts";
+import type { TSESLint, TSESTree } from "@typescript-eslint/utils";
+import { analyze, createAnalysis, type HermeticSettings, type MessageIds, SETTINGS_SCHEMA } from "../analysis.ts";
 import { type ClassNode, className, constructedClass, type FunctionNode, functionName, hasHermeticTag, isMarkedHermetic } from "../marking.ts";
+import { createRule, ruleDocs } from "./create-rule.ts";
 
 export type { MessageIds } from "../analysis.ts";
 
 /**
- * Options for `hermetic/sealed`. Each may also be set once for every rule in
- * `settings.hermetic`; the rule's own options win.
+ * Options for `hermetic/no-hidden-inputs`. Each may also be set once for
+ * every rule in `settings.hermetic`; the rule's own options win.
  *
  * - `types`: `"allow"` (default) permits type-only references that escape the
  *   function, since types are erased. `"structural-only"` reports escaping
  *   references to declared types, so the function can move to another file
  *   unchanged. Lib and other global types stay allowed.
  */
-export type SealedOptions = HermeticSettings;
+export type NoHiddenInputsOptions = HermeticSettings;
 
-export const createRule = ESLintUtils.RuleCreator(
-  (name) => `https://github.com/bombadil-labs/hermetic/blob/main/docs/rules/${name}.md`,
-);
+/** @deprecated Renamed to {@link NoHiddenInputsOptions} in 0.3.0. */
+export type SealedOptions = NoHiddenInputsOptions;
 
-export const sealed: TSESLint.RuleModule<MessageIds, [SealedOptions]> & { name: string } = createRule<
-  [SealedOptions],
-  MessageIds
->({
-  name: "sealed",
+type NoHiddenInputs = TSESLint.RuleModule<MessageIds, [NoHiddenInputsOptions]> & { name: string };
+
+const description = "Disallow hidden inputs in code marked hermetic";
+
+export const noHiddenInputs: NoHiddenInputs = createRule<[NoHiddenInputsOptions], MessageIds>({
+  name: "no-hidden-inputs",
   meta: {
     type: "problem",
-    docs: {
-      description: "Require hermetic functions to read nothing but their inputs",
-    },
+    docs: { description },
     schema: [{ type: "object", properties: SETTINGS_SCHEMA, additionalProperties: false }],
     defaultOptions: [{}],
     messages: {
@@ -52,12 +51,12 @@ export const sealed: TSESLint.RuleModule<MessageIds, [SealedOptions]> & { name: 
     },
   },
   create(context, [options]) {
-    const env = createEnvironment(context, options);
+    const analysis = createAnalysis(context, options);
     const marked = new Map<TSESTree.Node, string>();
     /** Nested hermetic functions share escapes; each node is reported once, for the innermost. */
     const reported = new Set<TSESTree.Node>();
     const check = (node: FunctionNode | ClassNode, name: string): void => {
-      for (const { node: target, messageId, data } of analyze(node, name, env)) {
+      for (const { node: target, messageId, data } of analyze(node, name, analysis)) {
         if (reported.has(target)) continue;
         reported.add(target);
         context.report({ node: target, messageId, data });
@@ -89,3 +88,26 @@ export const sealed: TSESLint.RuleModule<MessageIds, [SealedOptions]> & { name: 
     };
   },
 });
+
+/**
+ * The rule's name until 0.3.0, kept so that existing configs and
+ * `eslint-disable` comments keep working. It reports what
+ * `hermetic/no-hidden-inputs` reports.
+ *
+ * @deprecated Use {@link noHiddenInputs}, `hermetic/no-hidden-inputs`.
+ */
+export const sealed: NoHiddenInputs = {
+  ...noHiddenInputs,
+  name: "sealed",
+  meta: {
+    ...noHiddenInputs.meta,
+    docs: { description, url: ruleDocs("sealed") },
+    deprecated: {
+      message: "hermetic/sealed was renamed to hermetic/no-hidden-inputs, which reports the same problems.",
+      url: ruleDocs("sealed"),
+      replacedBy: [{ rule: { name: "no-hidden-inputs", url: ruleDocs("no-hidden-inputs") } }],
+      deprecatedSince: "0.3.0",
+      availableUntil: "1.0.0",
+    },
+  },
+};

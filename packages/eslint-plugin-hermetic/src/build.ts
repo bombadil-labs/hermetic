@@ -37,7 +37,7 @@ const DIRECTIVE = "use hermetic";
  * functions `prefer-hermetic` lifted as they were before the lift, while the
  * source stays hermetic. It runs before the other transforms, on the source as
  * written, and only in builds: the dev server and tests run the lifted source.
- * A binding it can't unlift exactly stays lifted, with a warning that says why.
+ * A wrapper it can't unlift exactly stays lifted, with a warning that says why.
  */
 export function unliftPlugin(options: UnliftPluginOptions = {}): UnliftPlugin {
   const include = options.include ?? /\.[cm]?[jt]sx?$/;

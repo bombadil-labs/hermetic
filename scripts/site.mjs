@@ -44,7 +44,10 @@ function library(id) {
 function libraryValues(id) {
   const l = library(id);
   const lifted = l.direct + l.shared;
+  const liftedMethods = l.methodsDirect + l.methodsShared;
   const reason = (name) => l.reasons.find((entry) => entry.reason === name)?.count ?? 0;
+  const methodReason = (name) => l.methodReasons.find((entry) => entry.reason === name)?.count ?? 0;
+  const methodsHidden = methodReason("reads a private or protected member") + methodReason("may read a protected member it inherits");
   return {
     name: l.name,
     version: l.packages[0].version,
@@ -70,6 +73,14 @@ function libraryValues(id) {
     methodsOnlyNames: count(l.methodBlockers.onlyNames),
     methodsPrivate: count(l.methodBlockers.privateName),
     methodsSuper: count(l.methodBlockers.superReference),
+    liftedMethods: count(liftedMethods),
+    liftedMethodsPct: percent(liftedMethods, l.methods),
+    liftedMethodsPctOfOthers: percent(liftedMethods, l.methods - l.hermeticMethods),
+    methodsDirect: count(l.methodsDirect),
+    methodsShared: count(l.methodsShared),
+    methodsSkipped: count(l.methodsSkipped),
+    methodsHidden: count(methodsHidden),
+    methodsPrivateNames: count(methodReason("a private name")),
     classes: count(l.classes),
     hermeticClasses: count(l.hermeticClasses),
     skipped: count(l.skipped),
@@ -115,8 +126,9 @@ const totals = data.libraries.reduce(
     typeErrorsIntroduced: sum.typeErrorsIntroduced + l.validation.typeErrorsIntroduced,
     methods: sum.methods + l.methods,
     hermeticMethods: sum.hermeticMethods + l.hermeticMethods,
+    liftedMethods: sum.liftedMethods + l.methodsDirect + l.methodsShared,
   }),
-  { candidates: 0, hermetic: 0, lifted: 0, typeErrorsIntroduced: 0, methods: 0, hermeticMethods: 0 },
+  { candidates: 0, hermetic: 0, lifted: 0, typeErrorsIntroduced: 0, methods: 0, hermeticMethods: 0, liftedMethods: 0 },
 );
 
 const values = {
@@ -134,6 +146,8 @@ const values = {
     methods: count(totals.methods),
     hermeticMethods: count(totals.hermeticMethods),
     hermeticMethodsPct: percent(totals.hermeticMethods, totals.methods),
+    liftedMethods: count(totals.liftedMethods),
+    liftedMethodsPct: percent(totals.liftedMethods, totals.methods),
   },
 };
 
@@ -198,12 +212,13 @@ function benchTable() {
   return `<figure class="example"><figcaption>${caption}</figcaption><div class="table-scroll"><table><thead><tr><th>Workload</th><th class="num">Original</th><th class="num">Lifted</th><th class="num">Unlifted</th><th class="num">Original again</th></tr></thead><tbody>${rows.join("")}</tbody></table></div></figure>`;
 }
 
-function reasonsTable(id) {
+function reasonsTable(id, methods) {
   const l = library(id);
-  const rows = l.reasons.map(
-    (entry) => `<tr><td>${escape(entry.reason)}</td><td class="num">${count(entry.count)}</td><td class="num">${percent(entry.count, l.skipped)}</td></tr>`,
+  const [reasons, skipped] = methods ? [l.methodReasons, l.methodsSkipped] : [l.reasons, l.skipped];
+  const rows = reasons.map(
+    (entry) => `<tr><td>${escape(entry.reason)}</td><td class="num">${count(entry.count)}</td><td class="num">${percent(entry.count, skipped)}</td></tr>`,
   );
-  return `<div class="table-scroll"><table><thead><tr><th>Why it was skipped</th><th class="num">Functions</th><th class="num">Share</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+  return `<div class="table-scroll"><table><thead><tr><th>Why it was skipped</th><th class="num">${methods ? "Methods" : "Functions"}</th><th class="num">Share</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 }
 
 function outcomeBar(id) {
@@ -233,7 +248,7 @@ function expand(html, file) {
   return html
     .replace(/<!-- example ([^ ]+) -->/g, (_, spec) => examplePanel(spec, file))
     .replace(/<!-- bench -->/g, () => benchTable())
-    .replace(/<!-- reasons ([\w-]+) -->/g, (_, id) => reasonsTable(id))
+    .replace(/<!-- (method-)?reasons ([\w-]+) -->/g, (_, methods, id) => reasonsTable(id, Boolean(methods)))
     .replace(/<!-- outcomes ([\w-]+) -->/g, (_, id) => outcomeBar(id))
     .replace(/<pre data-lang="(\w+)">([\s\S]*?)<\/pre>/g, (_, lang, code) => highlight(unescape(code), lang));
 }
@@ -317,6 +332,6 @@ for (const study of CASE_STUDIES) fs.writeFileSync(path.join(out, "case-studies"
 for (const asset of ["style.css", "favicon.svg"]) fs.copyFileSync(path.join(siteDir, asset), path.join(out, asset));
 for (const written of [path.join(out, "index.html"), ...CASE_STUDIES.map((study) => path.join(out, "case-studies", `${study.id}.html`))]) {
   const html = fs.readFileSync(written, "utf8");
-  if (/\{\{|<!-- (example|bench|reasons|outcomes)/.test(html)) throw new Error(`${written} still has an unresolved placeholder`);
+  if (/\{\{|<!-- (example|bench|reasons|method-reasons|outcomes)/.test(html)) throw new Error(`${written} still has an unresolved placeholder`);
 }
 console.log(`Built the site in ${path.relative(process.cwd(), out) || "."}`);

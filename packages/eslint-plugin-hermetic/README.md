@@ -41,7 +41,7 @@ export default defineConfig(
 | Rule | What it does | Fix |
 | --- | --- | --- |
 | [`hermetic/no-hidden-inputs`](https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/no-hidden-inputs.md) | Reports the hidden inputs of functions marked hermetic. In the recommended config. | |
-| [`hermetic/prefer-hermetic`](https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/prefer-hermetic.md) | Reports functions that are already hermetic, and with `lift`, functions it can rewrite to be hermetic. | Marks, or lifts |
+| [`hermetic/prefer-hermetic`](https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/prefer-hermetic.md) | Reports functions and methods that are already hermetic, and with `lift`, ones it can rewrite into a hermetic core. | Marks, or lifts |
 
 **Moving from `@bombadil/hermetic` 0.2.** Up to 0.2.0, the rules were published as `@bombadil/hermetic`. Install `@bombadil/eslint-plugin-hermetic` instead, and change the import in `eslint.config.js`. Three things changed with it. `hermetic/sealed` is now `hermetic/no-hidden-inputs`; the old name still works in 0.3, and is deprecated. Hermetic functions read no globals now, not even built-ins, so the `ground` and `aliasing` settings are gone. And a hermetic method can't use its class's private names, such as `#count`, since it would then work only inside that class.
 
@@ -171,7 +171,7 @@ See [`examples/pricing.ts`](https://github.com/bombadil-labs/hermetic/blob/main/
 
 ## Making a codebase hermetic
 
-`hermetic/prefer-hermetic` finds functions that are already hermetic and marks them. With `lift`, it also rewrites functions whose hidden inputs are all module-level values or globals, built-ins such as `Math` included: the body moves into a new hermetic function, the core, which receives them through `this`, and the original function becomes a wrapper that passes them in.
+`hermetic/prefer-hermetic` finds functions and methods that are already hermetic and marks them. With `lift`, it also rewrites functions and methods whose hidden inputs are all module-level values or globals, built-ins such as `Math` included: the body moves into a new hermetic function, the core, which receives them through `this`, and the original becomes a wrapper that passes them in. A method's wrapper passes its object as the core's first argument.
 
 ```ts
 // before
@@ -192,9 +192,9 @@ The wrapper passes exactly what the function used to read from its surroundings.
 npx eslint --fix --rule '{"hermetic/prefer-hermetic": ["warn", {"lift": true}]}' src/
 ```
 
-The fix only rewrites a function when the rewrite can't change its behavior or types, and leaves every other function as it was. On Effect, RxJS and TanStack Query, it marked 15.0% of 3,703 candidate functions and lifted 67.5%, and marked 23.7% of their 1,391 methods; the fixed code type-checks with no new errors, and Effect's own 6,233 tests pass on its lifted source. The [case studies](https://bombadil-labs.github.io/hermetic/) go through each library: what was marked, lifted and skipped, and why. The [rule's documentation](https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/prefer-hermetic.md) lists what it skips, what changes (a stack frame, `toString`, a per-call cost), and how it decides.
+The fix only rewrites a function when the rewrite can't change its behavior or types, and leaves every other function as it was. On Effect, RxJS and TanStack Query, it marked 15.0% of 3,703 candidate functions and lifted 67.5%, and marked 23.7% of their 1,391 methods and lifted 48.7%; the fixed code type-checks with no new errors, and Effect's own 6,233 tests pass on its lifted source. The [case studies](https://bombadil-labs.github.io/hermetic/) go through each library: what was marked, lifted and skipped, and why. The [rule's documentation](https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/prefer-hermetic.md) lists what it skips, what changes (a stack frame, `toString`, a per-call cost), and how it decides.
 
-The lift has an exact inverse, `unlift`, which turns each wrapper back into the original function, so the source can stay hermetic while a build runs the original code. On the corpus, unlifting the lifted code gives back the original program in every file, and Effect's benchmarks go from 19–45% slower when lifted to within noise of the original when unlifted. `unliftPlugin` runs it in Vite builds, with a source map that points into the lifted source:
+The lift has an exact inverse, `unlift`, which turns each wrapper back into the original function or method, so the source can stay hermetic while a build runs the original code. On the corpus, unlifting the lifted code gives back the original program in every file, and Effect's benchmarks go from 19–45% slower when lifted to within noise of the original when unlifted. `unliftPlugin` runs it in Vite builds, with a source map that points into the lifted source:
 
 ```ts
 // vite.config.ts

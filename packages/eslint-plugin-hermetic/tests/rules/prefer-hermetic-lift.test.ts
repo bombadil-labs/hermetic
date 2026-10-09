@@ -803,6 +803,23 @@ describe("lift semantics", () => {
     expect(output).toContain("get hostFn(): typeof hostFn { return hostFn; }");
   });
 
+  it("leaves a method the rule is turned off for, though its statement's other methods are lifted", () => {
+    const code = [
+      `const R = 1;`,
+      `export class A {`,
+      `  // eslint-disable-next-line hermetic/prefer-hermetic -- kept as written`,
+      `  kept() { return R; }`,
+      `  lifted() { return R; }`,
+      `  alsoLifted() { return R; }`,
+      `}`,
+    ].join("\n");
+    const { output, remaining } = fix(code);
+    expect(output).toContain(`  kept() { return R; }`);
+    expect(output).toContain("ALiftedHermetic");
+    expect(output).toContain("AAlsoLiftedHermetic");
+    expect(remaining).toEqual([]);
+  });
+
   it("preserves an async method's behavior", async () => {
     const code = `const OFFSET = 5;\nclass Later { base = 1; async add(x: number) { await null; return this.base + x + OFFSET; } }\nconst later = (x: number) => new Later().add(x);`;
     const { output, remaining } = fix(code);

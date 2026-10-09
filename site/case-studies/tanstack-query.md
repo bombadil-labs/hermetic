@@ -53,9 +53,13 @@ In react-query, hooks written as arrow functions lift with `React` passed in dir
 
 ## Classes and components
 
-TanStack Query's {{tanstack.methods}} methods are in `Query`, `QueryClient`, the caches and the observers. {{tanstack.hermeticMethods}} of them are already hermetic, and the fix marks them. The lift doesn't rewrite methods yet.
+TanStack Query's {{tanstack.methods}} methods are in `Query`, `QueryClient`, the caches and the observers. {{tanstack.hermeticMethods}} of them are already hermetic, and the fix marks them.
 
 Of the other {{tanstack.otherMethods}}, {{tanstack.methodsPrivate}} use private fields of their class, such as the `#queries` of `QueryCache`. A hermetic method can't: a private name works only inside the class that declares it, so a method that uses one can't be tested with another object, installed on another class, or rebuilt from its source. The class as a whole can use its own private fields, but marking a class checks every member at once, and {{tanstack.hermeticClasses}} of its {{tanstack.classes}} classes pass that check.
+
+The lift rewrites {{tanstack.liftedMethods}} methods. Most of the rest use private fields, or extend `Subscribable`, from another module, and read members such as its protected `listeners`, which the core, outside the class, can't reach.
+
+<!-- method-reasons tanstack-query -->
 
 - **Object members**, {{tanstack.members}} of them, are skipped: the lift only rewrites functions declared at the top level of a module. They're the default timers in `timeoutManager.ts`, which call the global `setTimeout` and its relatives.
 - `QueryClientProvider` and `QueryErrorResetBoundary` render JSX. JSX compiles to calls to a factory function that the source never names, so the lift has nothing to pass in, and both are skipped.

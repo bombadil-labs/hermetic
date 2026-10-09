@@ -37,12 +37,12 @@ Each word here has one meaning, in the docs, in the rules' messages, in the publ
 
 ## The lift
 
-- **Lift**: the `lift` fix of `hermetic/prefer-hermetic`. It splits a function whose hidden inputs are module-level names or globals into a core and a wrapper.
-- **Core**: the hermetic function the lift writes, named after the original with `Hermetic` at the end. It reads those hidden inputs from `this`.
-- **Wrapper**: the original function after a lift. It keeps its name, signature and export, and calls the core with the values it needs, so it is binding code.
+- **Lift**: the `lift` fix of `hermetic/prefer-hermetic`. It splits a function or method whose hidden inputs are module-level names or globals into a core and a wrapper.
+- **Core**: the hermetic function the lift writes, named after the original with `Hermetic` at the end, and a method's after its class or object too. It reads those hidden inputs from `this`. A method's core gets the method's object as its first argument, `self`, and its `arguments` object next, as `args`.
+- **Wrapper**: the original function or method after a lift. It keeps its name, signature and export, and calls the core with the values it needs, and a method's object, so it is binding code.
 - **Settled**: a module-level name that is initialized before a wrapper can run, and never reassigned. A wrapper passes settled values directly.
-- **Context**: the environment a wrapper passes when some value isn't settled. It is one object, named after the original with `Context` at the end and declared right after the wrapper, whose getters read each value when the core does.
-- **Unlift**: the lift's exact inverse. It folds each wrapper and its core back into the original function. `unliftPlugin` does it in builds.
+- **Context**: the environment a wrapper passes when some value isn't settled. It is one object, named after the core without `Hermetic` and with `Context` at the end, declared right after the wrapper's statement, whose getters read each value when the core does.
+- **Unlift**: the lift's exact inverse. It folds each wrapper and its core back into the original function or method. `unliftPlugin` does it in builds.
 
 ## At run time
 

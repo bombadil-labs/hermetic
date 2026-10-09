@@ -107,9 +107,13 @@ export const preferHermetic = createRule<[PreferHermeticOptions], MessageIds>({
         reportLift(plan, name, (fixer) => liftFix(fixer, plan, sourceCode, typescript));
       },
       "Program:exit"() {
-        for (const group of methods.values()) {
+        for (const [statement, group] of methods) {
+          // A directive that turns the rule off for one method drops that method's report, but another's fix would still split it.
+          const directed = sourceCode.getCommentsInside(statement).some((comment) => /^\s*eslint-(?:disable|enable)\b/.test(comment.value));
           const plans = group.map((entry) => entry.plan);
-          for (const { plan, name } of group) reportLift(plan, name, (fixer) => liftMethodsFix(fixer, plans, sourceCode, typescript));
+          for (const { plan, name } of group) {
+            reportLift(plan, name, (fixer) => liftMethodsFix(fixer, directed ? [plan] : plans, sourceCode, typescript));
+          }
         }
       },
     };

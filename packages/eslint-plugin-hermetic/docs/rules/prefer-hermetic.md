@@ -9,7 +9,7 @@ Mark functions that are already hermetic, and optionally rewrite others so they 
 The rule considers the outermost functions that have a name: function declarations, variable initializers, functions stored in object properties, and methods. Callbacks passed as arguments and IIFEs are ignored, and so are functions that are already marked. So are constructors: marking one marks its whole class, which is for its author to decide.
 
 - **`alreadyHermetic`**: the function would pass `hermetic/no-hidden-inputs` as it stands. The fix marks it. A block body gets `"use hermetic"` straight after its opening brace, so comments such as `// @ts-expect-error` stay with the statements they precede. An expression-bodied arrow gets an `@hermetic` tag, added to its JSDoc block if it has one.
-- **`liftable`**, with `lift: true`: the function's only hidden inputs are module-level values and globals, built-ins such as `Math` included. The fix moves the body into a new hermetic function that reads them from `this`, and turns the original function into a wrapper that calls it with them.
+- **`liftable`**, with `lift: true`: the function's only hidden inputs are module-level values and globals, built-ins such as `Math` included. The fix moves the body into a core, a new hermetic function that reads them from `this`, and turns the original function into a wrapper that calls the core with them. A method is lifted the same way, and its wrapper also passes its object, as [lifting methods](#lifting-methods) shows.
 
 With `lift: true`, this module:
 
@@ -102,6 +102,89 @@ The wrapper passes `this` in one of two forms:
 
 A function declaration is hoisted. It can run before any statement of its module, and in an import cycle, before its imports are initialized. So a declaration is only lifted when its values can be passed directly, which for a declaration that reads named imports takes `importsSettled`.
 
+### Lifting methods
+
+A method's `this` is its object, so its core can't also get the lifted values there. The core gets the object as its first argument, `self`, after its `this`, and the method's `arguments` object next, as `args`, when the method reads it. The method becomes the wrapper: it keeps its key, modifiers and signature, and passes its own `this`. With `lift: true`, this class:
+
+```ts
+import { format } from "./format";
+
+const SCALE = 100;
+
+export class Money {
+  constructor(readonly cents: number) {}
+
+  get dollars() {
+    return this.cents / SCALE;
+  }
+
+  toString() {
+    return format(this.dollars);
+  }
+
+  static of(dollars: number) {
+    return new Money(Math.round(dollars * SCALE));
+  }
+}
+```
+
+becomes:
+
+```ts
+import { format } from "./format";
+
+const SCALE = 100;
+
+export class Money {
+  constructor(readonly cents: number) {}
+
+  get dollars() {
+    return (MoneyGetDollarsHermetic<this>).call({ SCALE }, this);
+  }
+
+  toString() {
+    return (MoneyToStringHermetic<this>).call(MoneyToStringContext, this);
+  }
+
+  static of(dollars: number) {
+    return MoneyOfHermetic.call(MoneyOfContext, this, dollars);
+  }
+}
+
+function MoneyGetDollarsHermetic<Self extends Money>(this: { SCALE: typeof SCALE }, self: Self) {
+  "use hermetic";
+  return self.cents / this.SCALE;
+}
+
+const MoneyToStringContext = new (class {
+  get format(): typeof format { return format; }
+})();
+
+function MoneyToStringHermetic<Self extends Money>(this: { format: typeof format }, self: Self) {
+  "use hermetic";
+  return this.format(self.dollars);
+}
+
+const MoneyOfContext = new (class {
+  get Money(): typeof Money { return Money; }
+  get Math(): typeof Math { return Math; }
+  get SCALE(): typeof SCALE { return SCALE; }
+})();
+
+function MoneyOfHermetic(this: { Money: typeof Money; Math: typeof Math; SCALE: typeof SCALE }, self: typeof Money, dollars: number) {
+  "use hermetic";
+  return new this.Money(this.Math.round(dollars * this.SCALE));
+}
+```
+
+`dollars` reads `SCALE`, a constant declared above the class, so its wrapper passes it directly. `toString` reads a named import and `of` reads the global `Math`, so they pass shared contexts. `of` also reads `Money`, its own class: a method can only run once its class exists, so the class is settled for its methods.
+
+One fix splits every method a statement holds, and their cores follow the statement. A core is named after the class or object and the method: `MoneyGetDollarsHermetic` for the `dollars` getter. With TypeScript, the core names its object's type:
+
+- An instance method's core has a type parameter, `Self`, that stands for the class's polymorphic `this` type, and the wrapper passes `this` for it. A method that returns `this` still does, and `this is T` becomes `self is Self & (T)`.
+- A static method's `self` is `typeof` its class.
+- An object literal's method takes its object's type from its `this` parameter, from the annotation of the constant that holds the object or an `as` around it, reading `ThisType<T>` as `T`. Without either, `self` is `typeof` the constant, if the method's return type is written out.
+
 ### What the lift skips
 
 The fix only applies when the rewrite can't change behavior or types. It skips:
@@ -112,9 +195,13 @@ The fix only applies when the rewrite can't change behavior or types. It skips:
 - A direct call to `eval`, which sees the caller's scope. Called through `this`, it wouldn't.
 - Function declarations that read anything unsettled: named imports unless `importsSettled` is on, module constants, globals or mutable state, like `report` above.
 - Named function expressions, declarations with several declarators, and variables with a type annotation, such as `const f: Handler = ...`, whose function takes its type from the annotation.
-- Methods and accessors. A method's `this` is its object, so the lift has nowhere to pass in what it lifts. A method that is already hermetic is still marked.
-- Functions inside other functions, blocks or classes.
-- `this` parameters, `asserts` return types, and `@ts-expect-error`, `@ts-ignore` or `@ts-nocheck` comments, whose target lines would move.
+- Functions inside other functions, blocks or classes, and methods of a class or object inside a block or a generic class.
+- A function's `this` parameter, `asserts` return types, and `@ts-expect-error`, `@ts-ignore` or `@ts-nocheck` comments, whose target lines would move.
+- Methods that read a private name, such as `this.#count`, `super` or `new.target`, decorated methods, and functions stored in class fields.
+- Methods whose object's type the core can't name: an object literal without a type, a generic class expression, and a method with a parameter that takes its type from its object, such as a setter's from its getter.
+- Methods that read a member that their class, or a class it extends in the module, declares `private` or `protected`. The core is outside the class, where TypeScript doesn't let it reach them. When the class extends one from another module, which may declare protected members the rule can't see, methods that read a member of their object the module doesn't declare are skipped too, unless the class extends a built-in.
+- Methods that need a shared context while their statement is still running: in a class with a static block, a static initializer that runs code, or a decorator, or in a class or object passed to a function as it is created. The context is declared after the statement.
+- A member read twice by a lifted key, once in a test, as in `o[KEY] && o[KEY]()`. TypeScript narrows `o[KEY]` across the test, but not `o[this.KEY]`.
 - Signatures TypeScript can't repeat faithfully: a rest parameter in a generic function typed as anything but a type parameter, an array or a tuple, and a mapped type with an `as` clause written into the signature.
 - Functions that read the stack, through `.stack`, `Error.captureStackTrace`, `Error.prepareStackTrace` or `Error.stackTraceLimit`. The rewrite adds a stack frame.
 - Defaults that read a destructured parameter, and defaults that call a function. The wrapper and the core both keep each default, and the core's default runs again whenever the wrapper's produced `undefined`.
@@ -123,11 +210,11 @@ The fix only applies when the rewrite can't change behavior or types. It skips:
 ### What changes
 
 - **The stack has one more frame.** Code that finds its caller by counting frames, in the function or anything it calls, sees the wrapper.
-- **`toString()`** of the public function returns the wrapper. The body is in the core.
+- **`toString()`** of the public function or method returns the wrapper. The body is in the core.
 - **The wrapper calls the core with `.call`**, so the lifted code depends on `Function.prototype.call`, which the original didn't. The lift assumes nothing replaces it. Replacing it would break most JavaScript anyway.
 - **Functions called through `this` receive it as their `this`.** The hermetic function calls `this.round(...)` where the original called `round(...)`, so `round` runs with the context object as `this` instead of `undefined`. Functions that ignore `this`, which is nearly all module functions, are unaffected.
 - **A global function called without a receiver is still called without one.** The hermetic function calls `fetch(url)` as `(0, this.fetch)(url)`, so `fetch` still gets `undefined` as its `this`. ECMAScript's own functions ignore their receiver, so `Number(x)` becomes `this.Number(x)`.
-- **Async functions and generators** become plain functions that return the core's promise or iterator.
+- **Async functions and generators** become plain functions that return the core's promise or iterator, and async and generator methods become plain methods.
 - **Each call costs one more call and some property reads.** In microbenchmarks of Effect's hottest paths (collections, the fiber runtime, Schema decoding), the lifted library ran 19 to 45 percent slower. The cost is per call, so it matters where calls are cheap and frequent. [Unlifting](#unlifting-at-build-time) removes it from builds.
 - **Formatting and ordering.** The fix emits plain formatting, so run your formatter afterwards. The wrapper refers to its context object and hermetic function, which are declared after it, and `no-use-before-define` reports that unless its `functions` and `variables` options are off.
 
@@ -145,7 +232,7 @@ The bound corpus has 904 new type errors: generics that collapse to `unknown`, t
 
 ### Unlifting at build time
 
-The lift has an exact inverse. `unlift` turns each wrapper back into the original function: the core's parameters and body return to the wrapper, each `this.name` reads `name` again, and the core and its context object are removed. The result carries no directive, since it is no longer hermetic. The source can stay hermetic, checked and testable, while a build runs the original code, without the costs above.
+The lift has an exact inverse. `unlift` turns each wrapper back into the original function or method: the core's parameters and body return to the wrapper, each `this.name` reads `name` again, and the core and its context object are removed. In a method, `self` reads `this` again and `args` reads `arguments`, `async` and `*` go back before its key, and its lines are indented back into its class or object. The result carries no directive, since it is no longer hermetic. The source can stay hermetic, checked and testable, while a build runs the original code, without the costs above.
 
 It only turns a wrapper back where that is exact: the core is used by its wrapper alone, reads `this` only through the names its context provides, and none of those names is shadowed where the core reads it. A core that tests import, or that someone has edited out of the lift's shape, stays as it is and is reported.
 
@@ -195,7 +282,7 @@ type Options = {
 };
 ```
 
-- **`lift`**: also rewrite functions whose only hidden inputs are module-level values and globals, as described above.
+- **`lift`**: also rewrite functions and methods whose only hidden inputs are module-level values and globals, as described above.
 - **`importsSettled`**: with `lift`, treat named imports as settled: initialized before any function that reads them runs, and unchanged while it runs. Wrappers then pass imports directly, and function declarations that read imports, such as RxJS's operators, can be lifted. Turn it on only if no import cycle can call a function before its imports are initialized, and no exported `let` is reassigned while a function that reads it runs; in those two cases the lifted function reads a value the original wouldn't have. The [RxJS case study](https://bombadil-labs.github.io/hermetic/case-studies/rxjs.html#what-treating-imports-as-initialized-would-change) counts what it changes.
 - **`types`**: the same as for [`hermetic/no-hidden-inputs`](no-hidden-inputs.md#options), so that "already hermetic" means what `no-hidden-inputs` will enforce. Both rules also read it from `settings.hermetic`, which is the simplest way to keep them in step.
 
@@ -207,7 +294,7 @@ npx eslint --fix --rule '{"hermetic/prefer-hermetic": ["warn", {"lift": true}]}'
 
 Then turn on `hermetic/no-hidden-inputs`, which the recommended config does, so the marked functions stay hermetic.
 
-On a corpus of 3,703 candidate functions from Effect, RxJS and TanStack Query, 15.0% were already hermetic and 67.5% were lifted. The remaining 17.5% were skipped, among them function declarations that read named imports or globals, such as RxJS's operators, and React components. Of the libraries' 1,391 methods, 23.7% were already hermetic, and are marked; the lift doesn't rewrite methods yet. The fixed code parses, passes `hermetic/no-hidden-inputs`, is unchanged by a second `--fix`, and type-checks with no new errors. Effect's own 6,233 tests pass on its lifted source. `npm run corpus` in this repository reproduces these numbers.
+On a corpus of 3,703 candidate functions from Effect, RxJS and TanStack Query, 15.0% were already hermetic and 67.5% were lifted. The remaining 17.5% were skipped, among them function declarations that read named imports or globals, such as RxJS's operators, and React components. Of the libraries' 1,391 methods, 23.7% were already hermetic, and are marked, and 48.7% were lifted. The fixed code parses, passes `hermetic/no-hidden-inputs`, is unchanged by a second `--fix`, and type-checks with no new errors. Effect's own 6,233 tests pass on its lifted source. `npm run corpus` in this repository reproduces these numbers.
 
 ## When not to use it
 

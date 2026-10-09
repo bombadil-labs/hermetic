@@ -57,9 +57,13 @@ It is off by default, because the lift can't see those two cases coming: only th
 
 ## Methods
 
-{{rxjs.hermeticMethods}} of RxJS's {{rxjs.methods}} methods are already hermetic, and the fix marks them, such as the `next` of `AnonymousSubject`, which calls `this.destination?.next?.(value)`. The lift doesn't rewrite methods yet.
+{{rxjs.hermeticMethods}} of RxJS's {{rxjs.methods}} methods are already hermetic, and the fix marks them, such as the `next` of `AnonymousSubject`, which calls `this.destination?.next?.(value)`.
 
 Of the other {{rxjs.otherMethods}}, {{rxjs.methodsSuper}} call `super`, which a hermetic method can't. Most are in subjects, subscribers and scheduler actions that extend a base class, such as `BehaviorSubject`'s `next`, which calls `super.next`. `super` means the class the method was written in, so the same method would do something else on any other class. {{rxjs.methodsOnlyNames}} read nothing else but module-level names and globals.
+
+The lift rewrites {{rxjs.liftedMethods}} of the {{rxjs.otherMethods}}. Its core gets the method's object as its first argument, so it can't reach a member the class declares `private` or `protected`, and RxJS's classes keep most of their state that way: {{rxjs.methodsHidden}} methods are skipped for it.
+
+<!-- method-reasons rxjs -->
 
 ## Everything skipped
 

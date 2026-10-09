@@ -215,7 +215,7 @@ The fix only applies when the rewrite can't change behavior or types. It skips:
 - **Functions called through `this` receive it as their `this`.** The hermetic function calls `this.round(...)` where the original called `round(...)`, so `round` runs with the context object as `this` instead of `undefined`. Functions that ignore `this`, which is nearly all module functions, are unaffected.
 - **A global function called without a receiver is still called without one.** The hermetic function calls `fetch(url)` as `(0, this.fetch)(url)`, so `fetch` still gets `undefined` as its `this`. ECMAScript's own functions ignore their receiver, so `Number(x)` becomes `this.Number(x)`.
 - **Async functions and generators** become plain functions that return the core's promise or iterator, and async and generator methods become plain methods.
-- **Each call costs one more call and some property reads.** In microbenchmarks of Effect's hottest paths (collections, the fiber runtime, Schema decoding), the lifted library ran 19 to 45 percent slower. The cost is per call, so it matters where calls are cheap and frequent. [Unlifting](#unlifting-at-build-time) removes it from builds.
+- **Each call costs one more call and some property reads.** In microbenchmarks of Effect's hottest paths (collections, the fiber runtime, Schema decoding), the lifted library, its methods included, ran 14 to 63 percent slower. The cost is per call, so it matters where calls are cheap and frequent. [Unlifting](#unlifting-at-build-time) removes it from builds.
 - **Formatting and ordering.** The fix emits plain formatting, so run your formatter afterwards. The wrapper refers to its context object and hermetic function, which are declared after it, and `no-use-before-define` reports that unless its `functions` and `variables` options are off.
 
 ### Why a wrapper, not a bound function
@@ -240,9 +240,9 @@ On the corpus, unlifting the lifted code gives back the marked original in every
 
 | Workload | Lifted | Unlifted | Original again |
 | --- | --- | --- | --- |
-| `Effect.gen` with `map` and `flatMap` | +21% | +9% | +12% |
-| `Chunk`, `HashMap`, `Option` | +45% | −8% | −4% |
-| `Schema` decoding | +19% | +1% | −1% |
+| `Effect.gen` with `map` and `flatMap` | +58% | +4% | +1% |
+| `Chunk`, `HashMap`, `Option` | +63% | −2% | −2% |
+| `Schema` decoding | +14% | −2% | −3% |
 
 `npm run corpus -- roundtrip`, `npm run corpus -- effect --unlift` and `npm run corpus -- bench` reproduce these, and the [Effect case study](https://bombadil-labs.github.io/hermetic/case-studies/effect.html) has the full story.
 

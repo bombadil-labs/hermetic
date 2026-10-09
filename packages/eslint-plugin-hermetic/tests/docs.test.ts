@@ -46,9 +46,12 @@ describe("docs/rules/no-hidden-inputs.md", () => {
 
 describe("docs/rules/prefer-hermetic.md", () => {
   const preferDoc = fs.readFileSync(path.join(repoRoot, "docs/rules/prefer-hermetic.md"), "utf8");
-  const [before, after] = [...preferDoc.matchAll(/```ts\n([\s\S]*?)```/g)].map((match) => match[1] ?? "");
+  const blocks = [...preferDoc.matchAll(/```ts\n([\s\S]*?)```/g)].map((match) => match[1] ?? "");
+  const methods = preferDoc.indexOf("### Lifting methods");
+  const methodBlocks = [...preferDoc.slice(methods).matchAll(/```ts\n([\s\S]*?)```/g)].map((match) => match[1] ?? "");
+  const examples = { functions: blocks.slice(0, 2), methods: methodBlocks.slice(0, 2) };
 
-  it("shows exactly what the fix produces", () => {
+  it.each(Object.entries(examples))("shows exactly what the fix does to %s", (_, [before, after]) => {
     const result = new Linter().verifyAndFix(
       before ?? "",
       [

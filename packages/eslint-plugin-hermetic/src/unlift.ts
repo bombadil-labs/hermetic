@@ -1,8 +1,9 @@
 import * as tsParser from "@typescript-eslint/parser";
 import { AST_NODE_TYPES, ASTUtils, TSESLint, type TSESTree } from "@typescript-eslint/utils";
-import { childNodes, type Edit, looseComments, parameterSpan, renderComments } from "./ast.ts";
+import { isThisBoundary } from "./analysis.ts";
+import { childNodes, codeLineStarts, type Edit, LINE_BREAK, looseComments, parameterSpan, renderComments } from "./ast.ts";
 import { compose, Mapped, mappedAt, type MappedEdit, type SourceMap, sourceMap } from "./mapped.ts";
-import { type FunctionNode, isFunctionNode } from "./marking.ts";
+import { type FunctionNode, isFunctionNode, staticKey } from "./marking.ts";
 
 type SourceCode = TSESLint.SourceCode;
 type Variable = TSESLint.Scope.Variable;
@@ -41,18 +42,20 @@ export function unlift(code: string, filename = "module.ts", options: UnliftOpti
   const unlifted: string[] = [];
   const skipped: { name: string; line: number; reason: string }[] = [];
   for (const statement of sourceCode.ast.body) {
-    const wrapper = functionOf(statement);
-    const forwarding = wrapper && forwardingCall(wrapper);
-    if (!wrapper || !forwarding) continue;
-    const name = wrapperName(wrapper);
-    const plan = planUnlift(wrapper, forwarding.call, forwarding.core, sourceCode);
-    if (plan === undefined) continue;
-    if (typeof plan === "string") {
-      skipped.push({ name, line: wrapper.loc.start.line, reason: plan });
-      continue;
+    const declared = functionOf(statement);
+    for (const wrapper of declared ? [declared] : methodsOf(statement, sourceCode)) {
+      const forwarding = forwardingCall(wrapper);
+      if (!forwarding) continue;
+      const name = wrapperName(wrapper, sourceCode);
+      const plan = planUnlift(wrapper, forwarding.call, forwarding.core, sourceCode);
+      if (plan === undefined) continue;
+      if (typeof plan === "string") {
+        skipped.push({ name, line: wrapper.loc.start.line, reason: plan });
+        continue;
+      }
+      edits.push(...plan);
+      unlifted.push(name);
     }
-    edits.push(...plan);
-    unlifted.push(name);
   }
   const sorted = [...edits].sort((a, b) => a.range[0] - b.range[0]);
   for (let i = 1; i < sorted.length; i++) {
@@ -95,20 +98,55 @@ function functionOf(statement: TSESTree.ProgramStatement): FunctionNode | undefi
   return init?.type === AST_NODE_TYPES.ArrowFunctionExpression || init?.type === AST_NODE_TYPES.FunctionExpression ? init : undefined;
 }
 
-function wrapperName(fn: FunctionNode): string {
+/** The methods a statement holds, in classes and object literals, outside any function. */
+function methodsOf(statement: TSESTree.ProgramStatement, sourceCode: SourceCode): TSESTree.FunctionExpression[] {
+  const found: TSESTree.FunctionExpression[] = [];
+  const visit = (node: TSESTree.Node): void => {
+    if (isFunctionNode(node)) {
+      if (node.type === AST_NODE_TYPES.FunctionExpression && memberOf(node)) found.push(node);
+      return;
+    }
+    for (const child of childNodes(node, sourceCode.visitorKeys)) visit(child);
+  };
+  visit(statement);
+  return found;
+}
+
+/** The class member or object property whose method `fn` is. */
+function memberOf(fn: FunctionNode): TSESTree.MethodDefinition | TSESTree.Property | undefined {
+  const parent = fn.parent;
+  if (parent.type === AST_NODE_TYPES.MethodDefinition && parent.value === fn && parent.kind !== "constructor") return parent;
+  if (parent.type === AST_NODE_TYPES.Property && parent.value === fn && (parent.method || parent.kind !== "init")) return parent;
+  return undefined;
+}
+
+function wrapperName(fn: FunctionNode, sourceCode: SourceCode): string {
   if (fn.id) return fn.id.name;
+  const member = memberOf(fn);
+  if (member) {
+    const key = member.key;
+    const label =
+      !member.computed && (key.type === AST_NODE_TYPES.Identifier || key.type === AST_NODE_TYPES.PrivateIdentifier)
+        ? key.name
+        : (staticKey(key) ?? `[${sourceCode.text.slice(key.range[0], key.range[1])}]`);
+    const holder = member.type === AST_NODE_TYPES.MethodDefinition ? member.parent.parent : member.parent;
+    const owner = "id" in holder && holder.id ? holder.id.name : holder.parent.type === AST_NODE_TYPES.VariableDeclarator && holder.parent.id.type === AST_NODE_TYPES.Identifier ? holder.parent.id.name : undefined;
+    return owner ? `${owner}.${label}` : label;
+  }
   return fn.parent.type === AST_NODE_TYPES.VariableDeclarator && fn.parent.id.type === AST_NODE_TYPES.Identifier
     ? fn.parent.id.name
     : "default";
 }
 
-/** `core.call(context, ...args)` or `(core<T>).call(...)` as the function's whole body. */
+/** `core.call(context, ...args)` or `(core<T>).call(...)` as the function's whole body, which a setter does not return. */
 function forwardingCall(fn: FunctionNode): { call: TSESTree.CallExpression; core: TSESTree.Identifier } | undefined {
   let expression: TSESTree.Node = fn.body;
   if (fn.body.type === AST_NODE_TYPES.BlockStatement) {
     const [only, ...rest] = fn.body.body;
-    if (rest.length > 0 || only?.type !== AST_NODE_TYPES.ReturnStatement || !only.argument) return undefined;
-    expression = only.argument;
+    if (rest.length > 0 || !only) return undefined;
+    if (only.type === AST_NODE_TYPES.ReturnStatement && only.argument) expression = only.argument;
+    else if (only.type === AST_NODE_TYPES.ExpressionStatement && !only.directive && memberOf(fn)?.kind === "set") expression = only.expression;
+    else return undefined;
   }
   if (expression.type !== AST_NODE_TYPES.CallExpression || expression.optional) return undefined;
   const callee = expression.callee;
@@ -161,32 +199,56 @@ function planUnlift(
   if (coreVariable?.references.some((reference) => reference.identifier !== callee)) return "the core is used elsewhere";
   if (wrapper.type === AST_NODE_TYPES.ArrowFunctionExpression && core.generator) return "an arrow cannot be a generator";
 
-  const [contextArgument, ...forwarded] = call.arguments;
+  const [contextArgument, ...passed] = call.arguments;
   const context = readContext(contextArgument, sourceCode);
   if (typeof context === "string") return context;
 
   const thisParameter = core.params[0]?.type === AST_NODE_TYPES.Identifier && core.params[0].name === "this" ? core.params[0] : undefined;
-  const coreParams = thisParameter ? core.params.slice(1) : core.params;
+  const object = passed[0]?.type === AST_NODE_TYPES.ThisExpression ? methodForwarding(wrapper, core, thisParameter, passed, call, sourceCode) : undefined;
+  if (typeof object === "string") return object;
+  const coreParams = core.params.slice((thisParameter ? 1 : 0) + (object?.leading.length ?? 0));
+  const forwarded = object ? passed.slice(object.leading.length) : passed;
+  const wrapperParams = object?.wrapperThis ? wrapper.params.slice(1) : wrapper.params;
 
   const edits: Edit[] = [];
-  const problem = substituteThis(core, context.entries, sourceCode, edits);
+  // Unlifted, the body reads each name from where the wrapper is: the module, or the class or object around a method.
+  const outer = object ? sourceCode.getScope(wrapper).upper : sourceCode.scopeManager?.acquire(core)?.upper;
+  const problem = substituteThis(core, context.entries, outer ?? null, sourceCode, edits) ?? (object && substituteObject(core, object, sourceCode, edits));
   if (problem) return problem;
-  const mismatch = matchParameters(wrapper, coreParams, forwarded, sourceCode, edits);
-  if (mismatch) return mismatch;
 
   // The directive goes, with the whitespace the lift put before it.
   const beforeDirective = sourceCode.getTokenBefore(directive, { includeComments: true });
   edits.push({ range: [beforeDirective?.range[1] ?? directive.range[0], directive.range[1]], text: "" });
-  if (thisParameter) {
+  const text = sourceCode.text;
+  if (object) {
+    // The context, the object and `arguments` go; the wrapper's `this` parameter, if it has one, takes their place.
+    const leading = [...(thisParameter ? [thisParameter] : []), ...object.leading];
+    const [first, last, next] = [leading[0], leading.at(-1), coreParams[0]];
+    if (first && last) {
+      const restored = object.wrapperThis ? text.slice(object.wrapperThis.range[0], object.wrapperThis.range[1]) : "";
+      const separator = object.wrapperThis && next ? indented(text.slice(last.range[1], next.range[0]), object.indent) : "";
+      const range = [first.range[0], next ? next.range[0] : last.range[1]] as const;
+      // Edits inside the parameters that go, such as `Self` in `self: Self`, go with them.
+      const kept = edits.filter((edit) => edit.range[1] <= range[0] || edit.range[0] >= range[1]);
+      edits.splice(0, edits.length, ...kept, { range, text: `${restored}${separator}` });
+    }
+    // The core sits at the module's level; back in its class or object, each line of it is indented again.
+    const ranges = [parameterSpan(core, sourceCode), core.body.range] as const;
+    const replaced = [...edits];
+    for (const at of codeLineStarts(sourceCode, core, ranges)) {
+      if (object.indent && !replaced.some(({ range }) => range[0] <= at && at < range[1])) edits.push({ range: [at, at], text: object.indent });
+    }
+  } else if (thisParameter) {
     const comma = sourceCode.getTokenAfter(thisParameter);
     const next = comma?.value === "," ? sourceCode.getTokenAfter(comma, { includeComments: true }) : undefined;
     edits.push({ range: [thisParameter.range[0], next ? next.range[0] : thisParameter.range[1]], text: "" });
   }
+  const mismatch = matchParameters(wrapperParams, coreParams, forwarded, sourceCode, edits);
+  if (mismatch) return mismatch;
 
-  const text = sourceCode.text;
   const raw = (node: TSESTree.Node | undefined | null): Mapped => (node ? Mapped.copy(text, node.range) : Mapped.empty);
   // A named parameter reads as the wrapper still spells it, without annotations the lift added to the core.
-  const restored = wrapper.params.flatMap((param, index) => {
+  const restored = wrapperParams.flatMap((param, index) => {
     const coreParam = coreParams[index];
     const named =
       param.type === AST_NODE_TYPES.Identifier ||
@@ -202,16 +264,29 @@ function planUnlift(
   const params = compose(text, parameterSpan(core, sourceCode), [...edits.filter((edit) => !within(edit)), ...restored]);
   // New text in the function stands for the start of the wrapper it replaces.
   const at = mappedAt(wrapper.range[0]);
-  const signature = at`${raw(core.typeParameters)}(${params})${raw(core.returnType)}`;
+  // A method's wrapper kept its signature as written; the core's names its object's type.
+  const signatureOf = object ? wrapper : core;
+  const signature = at`${raw(signatureOf.typeParameters)}(${params})${raw(signatureOf.returnType)}`;
   const block = compose(text, core.body.range, edits);
   // Comments the lift carried between the signature and the body. An arrow takes them after `=>`,
   // where a line break is allowed.
   const copied: (readonly [number, number])[] = [parameterSpan(core, sourceCode), core.body.range];
   for (const part of [core.typeParameters, core.returnType]) if (part) copied.push(part.range);
   const loose = looseComments(core, copied, sourceCode);
-  const notes = Mapped.place(renderComments(loose, sourceCode, indentOf(sourceCode, core)), loose[0]?.range[0] ?? core.range[0]);
+  const notes = Mapped.place(renderComments(loose, sourceCode, indentOf(sourceCode, object?.member ?? core)), loose[0]?.range[0] ?? core.range[0]);
+  const modifiers = `${core.async ? "async " : ""}${core.generator ? "*" : ""}`;
   let replacement: Mapped;
-  if (wrapper.type === AST_NODE_TYPES.ArrowFunctionExpression) {
+  const added: MappedEdit[] = [];
+  if (object) {
+    replacement = at`${signature} ${notes}${block}`;
+    // `async` and `*` go back before the method's key.
+    if (modifiers) {
+      const key = object.member.key;
+      const first = object.member.computed ? sourceCode.getTokenBefore(key, { filter: (token) => token.value === "[" }) : sourceCode.getFirstToken(key);
+      if (!first) return "the method's key has no tokens";
+      added.push({ range: [first.range[0], first.range[0]], text: modifiers });
+    }
+  } else if (wrapper.type === AST_NODE_TYPES.ArrowFunctionExpression) {
     replacement = at`${core.async ? "async " : ""}${signature} => ${notes}${conciseBody(core, sourceCode, edits) ?? block}`;
   } else {
     const name = wrapper.type === AST_NODE_TYPES.FunctionDeclaration ? ` ${wrapper.id?.name ?? ""}` : " ";
@@ -223,7 +298,55 @@ function planUnlift(
     const before = sourceCode.getTokenBefore(statement, { includeComments: true });
     return [{ range: [before ? before.range[1] : 0, statement.range[1]] as const, text: "" }];
   });
-  return [{ range: wrapper.range, text: replacement }, ...removals];
+  return [...added, { range: wrapper.range, text: replacement }, ...removals];
+}
+
+/** How a method's wrapper passes its object, and `arguments`, to its core. */
+interface ObjectForwarding {
+  readonly member: TSESTree.MethodDefinition | TSESTree.Property;
+  /** The core's parameters for them, after its context's: `self`, then `args` if it reads `arguments`. */
+  readonly leading: readonly TSESTree.Identifier[];
+  readonly self: TSESTree.Identifier;
+  readonly args?: TSESTree.Identifier;
+  /** The type parameter that stands for the polymorphic `this` type, when the wrapper passes `this` for it. */
+  readonly selfType?: string;
+  /** The wrapper's own `this` parameter, which the core's `self` replaced. */
+  readonly wrapperThis?: TSESTree.Identifier;
+  /** What the method's lines have in front of the core's. */
+  readonly indent: string;
+}
+
+/** For a wrapper that passes `this` after its context: where its object and `arguments` go in the core. */
+function methodForwarding(
+  wrapper: FunctionNode,
+  core: TSESTree.FunctionDeclaration,
+  thisParameter: TSESTree.Identifier | undefined,
+  passed: readonly TSESTree.CallExpressionArgument[],
+  call: TSESTree.CallExpression,
+  sourceCode: SourceCode,
+): ObjectForwarding | string {
+  const member = memberOf(wrapper);
+  if (!member) return "the wrapper passes its this but is not a method";
+  const [self, args] = core.params.slice(thisParameter ? 1 : 0);
+  if (self?.type !== AST_NODE_TYPES.Identifier) return "the core's object parameter is not a name";
+  const passesArguments = passed[1]?.type === AST_NODE_TYPES.Identifier && passed[1].name === "arguments";
+  if (passesArguments && args?.type !== AST_NODE_TYPES.Identifier) return "the core's arguments parameter is not a name";
+  const callee = call.callee.type === AST_NODE_TYPES.MemberExpression ? call.callee.object : undefined;
+  const typeArguments = callee?.type === AST_NODE_TYPES.TSInstantiationExpression ? callee.typeArguments.params : [];
+  const selfType = typeArguments[0]?.type === AST_NODE_TYPES.TSThisType ? core.typeParameters?.params[0]?.name.name : undefined;
+  const first = wrapper.params[0];
+  const wrapperThis = first?.type === AST_NODE_TYPES.Identifier && first.name === "this" ? first : undefined;
+  const memberIndent = indentOf(sourceCode, member);
+  const base = indentOf(sourceCode, core);
+  return {
+    member,
+    leading: passesArguments && args?.type === AST_NODE_TYPES.Identifier ? [self, args] : [self],
+    self,
+    ...(passesArguments && args?.type === AST_NODE_TYPES.Identifier && { args }),
+    ...(selfType && { selfType }),
+    ...(wrapperThis && { wrapperThis }),
+    indent: memberIndent.startsWith(base) ? memberIndent.slice(base.length) : "",
+  };
 }
 
 /**
@@ -239,9 +362,10 @@ function readContext(
   sourceCode: SourceCode,
 ): { entries: Map<string, Entry>; statement?: TSESTree.Node } | string {
   const entries = new Map<string, Entry>();
+  // A method's context may pass its own class, by the name its body sees.
   const resolve = (identifier: TSESTree.Identifier): Variable | undefined | "local" => {
     const variable = ASTUtils.findVariable(sourceCode.getScope(identifier), identifier) ?? undefined;
-    return !variable || variable.scope.type === "module" || variable.scope.type === "global" ? variable : "local";
+    return !variable || variable.scope.type === "module" || variable.scope.type === "global" || variable.scope.type === "class" ? variable : "local";
   };
 
   if (argument?.type === AST_NODE_TYPES.ObjectExpression) {
@@ -376,29 +500,25 @@ function setterWrite(fn: TSESTree.FunctionExpression): TSESTree.Identifier | und
 function substituteThis(
   core: TSESTree.FunctionDeclaration,
   entries: ReadonlyMap<string, Entry>,
+  outer: TSESLint.Scope.Scope | null,
   sourceCode: SourceCode,
   edits: Edit[],
 ): string | undefined {
   const coreScope = sourceCode.scopeManager?.acquire(core);
-  const moduleScope = coreScope?.upper;
-  if (!coreScope || !moduleScope) return "the core has no scope";
+  if (!coreScope || !outer) return "the core has no scope";
   // The wrapper forwards only its declared parameters, so the core's `arguments` may hold fewer.
   if ((coreScope.set.get("arguments")?.references.length ?? 0) > 0) return "the core uses arguments";
   let problem: string | undefined;
-  const visit = (node: TSESTree.Node): void => {
-    if (problem) return;
-    if (node !== core && isFunctionNode(node) && node.type !== AST_NODE_TYPES.ArrowFunctionExpression) return;
-    if (node.type === AST_NODE_TYPES.ClassBody) {
-      if (containsOwnThis(node, sourceCode)) problem = "the core uses this inside a class body";
-      return;
-    }
+  // `this`, `super` and `new.target` are the core's own outside nested functions, fields and static blocks.
+  const visit = (node: TSESTree.Node, parent?: TSESTree.Node): void => {
+    if (problem || (parent && isThisBoundary(parent, node))) return;
     if (node.type === AST_NODE_TYPES.Super) problem = "the core uses super";
     if (node.type === AST_NODE_TYPES.MetaProperty && node.meta.name === "new") problem = "the core uses new.target";
     if (node.type === AST_NODE_TYPES.ThisExpression) {
-      problem = substituteSite(node, entries, coreScope, moduleScope, sourceCode, edits);
+      problem = substituteSite(node, entries, coreScope, outer, sourceCode, edits);
       return;
     }
-    for (const child of childNodes(node, sourceCode.visitorKeys)) visit(child);
+    for (const child of childNodes(node, sourceCode.visitorKeys)) visit(child, node);
   };
   const [first, ...others] = core.params;
   const params = first?.type === AST_NODE_TYPES.Identifier && first.name === "this" ? others : core.params;
@@ -407,21 +527,74 @@ function substituteThis(
   return problem;
 }
 
-/** True when `this` appears in a class body outside the functions nested in it: a computed key or a field. */
-function containsOwnThis(classBody: TSESTree.ClassBody, sourceCode: SourceCode): boolean {
-  const visit = (node: TSESTree.Node): boolean => {
-    if (node.type === AST_NODE_TYPES.ThisExpression) return true;
-    if (isFunctionNode(node) && node.type !== AST_NODE_TYPES.ArrowFunctionExpression) return false;
-    return [...childNodes(node, sourceCode.visitorKeys)].some(visit);
-  };
-  return visit(classBody);
+/**
+ * Rewrites the core's `self` as `this`, its `args` as `arguments`, and its
+ * `Self` type as `this`, the way the method read them. Each must be read
+ * where the method's own `this` and `arguments` reach, outside any function
+ * nested in it, and never assigned.
+ */
+function substituteObject(
+  core: TSESTree.FunctionDeclaration,
+  object: ObjectForwarding,
+  sourceCode: SourceCode,
+  edits: Edit[],
+): string | undefined {
+  const scope = sourceCode.scopeManager?.acquire(core);
+  for (const [param, name] of [[object.self, "this"], [object.args, "arguments"]] as const) {
+    if (!param) continue;
+    for (const reference of scope?.set.get(param.name)?.references ?? []) {
+      const identifier = reference.identifier;
+      if (reference.isWrite()) return `the core assigns '${param.name}'`;
+      if (!readsOwnThis(identifier, core)) return `the core reads '${param.name}' inside a function or class body of its own`;
+      const parent = identifier.parent;
+      if (name === "this" && parent?.type === AST_NODE_TYPES.Property && parent.shorthand) return `the core reads '${param.name}' as a shorthand property`;
+      // The lift expands `{ arguments }` to `{ arguments: args }`; fold it back.
+      const expanded =
+        name === "arguments" &&
+        parent?.type === AST_NODE_TYPES.Property &&
+        parent.value === identifier &&
+        !parent.computed &&
+        parent.key.type === AST_NODE_TYPES.Identifier &&
+        parent.key.name === "arguments";
+      edits.push({ range: expanded ? [parent.key.range[0], identifier.range[1]] : identifier.range, text: name });
+    }
+  }
+  if (object.selfType) {
+    const visit = (node: TSESTree.Node): void => {
+      if (
+        node.type === AST_NODE_TYPES.TSTypeReference &&
+        node.typeName.type === AST_NODE_TYPES.Identifier &&
+        node.typeName.name === object.selfType &&
+        !node.typeArguments
+      ) {
+        edits.push({ range: node.range, text: "this" });
+        return;
+      }
+      for (const child of childNodes(node, sourceCode.visitorKeys)) visit(child);
+    };
+    for (const part of [...core.params, core.body]) visit(part);
+  }
+  return undefined;
+}
+
+/** True when nothing between `node` and the core sets its own `this`. */
+function readsOwnThis(node: TSESTree.Node, core: TSESTree.FunctionDeclaration): boolean {
+  for (let child = node, parent = node.parent; parent && child !== core; child = parent, parent = parent.parent) {
+    if (parent !== core && isThisBoundary(parent, child)) return false;
+  }
+  return true;
+}
+
+/** `text` with `indent` after each line break: the separator between two parameters, whose next line holds the second. */
+function indented(text: string, indent: string): string {
+  return text.replace(new RegExp(LINE_BREAK.source, "g"), (lineBreak) => `${lineBreak}${indent}`);
 }
 
 function substituteSite(
   node: TSESTree.ThisExpression,
   entries: ReadonlyMap<string, Entry>,
   coreScope: TSESLint.Scope.Scope,
-  moduleScope: TSESLint.Scope.Scope,
+  outer: TSESLint.Scope.Scope,
   sourceCode: SourceCode,
   edits: Edit[],
 ): string | undefined {
@@ -443,11 +616,12 @@ function substituteSite(
   if (write && !entry.writable) return `the core assigns 'this.${key}', which its context cannot write`;
 
   // The name must reach the same variable from here as the context's accessor did.
-  for (let scope: TSESLint.Scope.Scope | null = sourceCode.getScope(member); scope && scope !== moduleScope; scope = scope.upper) {
+  for (let scope: TSESLint.Scope.Scope | null = sourceCode.getScope(member); scope; scope = scope.upper) {
     if (scope.set.get(entry.name)?.isValueVariable) return `a local '${entry.name}' in the core shadows the variable the context read`;
     if (scope === coreScope) break;
   }
-  if ((ASTUtils.findVariable(moduleScope, entry.name) ?? undefined) !== entry.variable) {
+  const reached = ASTUtils.findVariable(outer, entry.name) ?? undefined;
+  if (reached !== entry.variable && !sameClass(reached, entry.variable)) {
     return `'${entry.name}' in the core would reach a different variable`;
   }
 
@@ -475,6 +649,22 @@ function substituteSite(
     edits.push({ range: member.range, text: entry.name });
   }
   return undefined;
+}
+
+/**
+ * True when one variable is a class declaration's name inside its body and
+ * the other its name in the module, which is never reassigned: both hold the
+ * class whenever its methods run.
+ */
+function sameClass(inner: Variable | undefined, outer: Variable | undefined): boolean {
+  const declaration = inner?.defs[0]?.node;
+  return (
+    declaration?.type === AST_NODE_TYPES.ClassDeclaration &&
+    inner?.scope.type === "class" &&
+    outer?.defs.length === 1 &&
+    outer.defs[0]?.node === declaration &&
+    outer.references.every((reference) => !reference.isWrite() || reference.init === true)
+  );
 }
 
 /** The range of `(0, member)` when it is called as a callee or a tag, the form the lift writes for a bare call. */
@@ -531,18 +721,18 @@ function writeKind(member: TSESTree.MemberExpression): "write" | "delete" | unde
  * `this.` is gone.
  */
 function matchParameters(
-  wrapper: FunctionNode,
+  wrapperParams: readonly TSESTree.Parameter[],
   coreParams: readonly TSESTree.Parameter[],
   forwarded: readonly TSESTree.CallExpressionArgument[],
   sourceCode: SourceCode,
   edits: readonly Edit[],
 ): string | undefined {
   const mismatch = "the wrapper's parameters do not match the core's";
-  if (wrapper.params.length !== coreParams.length || forwarded.length !== wrapper.params.length) return mismatch;
+  if (wrapperParams.length !== coreParams.length || forwarded.length !== wrapperParams.length) return mismatch;
   const text = sourceCode.text;
   const sameDefault = (wrapperDefault: TSESTree.Expression, coreDefault: TSESTree.Expression): boolean =>
     text.slice(wrapperDefault.range[0], wrapperDefault.range[1]) === compose(text, coreDefault.range, edits).text;
-  for (const [index, param] of wrapper.params.entries()) {
+  for (const [index, param] of wrapperParams.entries()) {
     const core = coreParams[index];
     const argument = forwarded[index];
     if (!core || !argument) return mismatch;

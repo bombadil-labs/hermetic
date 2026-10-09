@@ -1,7 +1,7 @@
 {
   "generated": {
-    "date": "2026-09-28T18:31:05.018Z",
-    "commit": "bd7fe96",
+    "date": "2026-10-09T01:11:36.068Z",
+    "commit": "41cc486",
     "dirty": false,
     "node": "v22.22.2"
   },
@@ -27,6 +27,63 @@
         "superReference": 0,
         "other": 11
       },
+      "methodsDirect": 249,
+      "methodsShared": 386,
+      "methodsSkipped": 184,
+      "methodReasons": [
+        {
+          "reason": "reads a private or protected member",
+          "count": 87
+        },
+        {
+          "reason": "a parameter typed by its object",
+          "count": 32
+        },
+        {
+          "reason": "its object's type has no name",
+          "count": 25
+        },
+        {
+          "reason": "a class field",
+          "count": 13
+        },
+        {
+          "reason": "a method its statement may call before its context exists",
+          "count": 8
+        },
+        {
+          "reason": "suppresses type errors",
+          "count": 6
+        },
+        {
+          "reason": "reads the stack",
+          "count": 5
+        },
+        {
+          "reason": "a type parameter shadows its class's",
+          "count": 2
+        },
+        {
+          "reason": "may read a protected member it inherits",
+          "count": 2
+        },
+        {
+          "reason": "narrows by a lifted key",
+          "count": 1
+        },
+        {
+          "reason": "a private name",
+          "count": 1
+        },
+        {
+          "reason": "the this type",
+          "count": 1
+        },
+        {
+          "reason": "a lifted name inside a nested function or class",
+          "count": 1
+        }
+      ],
       "classes": 292,
       "hermeticClasses": 14,
       "hermetic": 516,
@@ -89,10 +146,10 @@
       "validation": {
         "filesChanged": 233,
         "parseErrors": 0,
-        "sealedErrors": 0,
+        "hiddenInputErrors": 0,
         "unsettledFiles": 0,
         "typeErrorsIntroduced": 0,
-        "folded": 2475,
+        "folded": 3110,
         "roundTripSkipped": 0,
         "roundTripDiffering": 0,
         "roundTripTypeErrorsIntroduced": 0
@@ -169,6 +226,35 @@
         "superReference": 20,
         "other": 0
       },
+      "methodsDirect": 6,
+      "methodsShared": 18,
+      "methodsSkipped": 70,
+      "methodReasons": [
+        {
+          "reason": "reads a private or protected member",
+          "count": 52
+        },
+        {
+          "reason": "a parameter typed by its object",
+          "count": 9
+        },
+        {
+          "reason": "may read a protected member it inherits",
+          "count": 4
+        },
+        {
+          "reason": "a method its statement may call before its context exists",
+          "count": 2
+        },
+        {
+          "reason": "a class field",
+          "count": 2
+        },
+        {
+          "reason": "its object's type has no name",
+          "count": 1
+        }
+      ],
       "classes": 33,
       "hermeticClasses": 2,
       "hermetic": 18,
@@ -210,12 +296,12 @@
         "map": 1
       },
       "validation": {
-        "filesChanged": 35,
+        "filesChanged": 42,
         "parseErrors": 0,
-        "sealedErrors": 0,
+        "hiddenInputErrors": 0,
         "unsettledFiles": 0,
         "typeErrorsIntroduced": 0,
-        "folded": 7,
+        "folded": 31,
         "roundTripSkipped": 0,
         "roundTripDiffering": 0,
         "roundTripTypeErrorsIntroduced": 0
@@ -272,6 +358,27 @@
         "superReference": 5,
         "other": 0
       },
+      "methodsDirect": 0,
+      "methodsShared": 19,
+      "methodsSkipped": 129,
+      "methodReasons": [
+        {
+          "reason": "a private name",
+          "count": 94
+        },
+        {
+          "reason": "may read a protected member it inherits",
+          "count": 25
+        },
+        {
+          "reason": "reads a private or protected member",
+          "count": 7
+        },
+        {
+          "reason": "super",
+          "count": 3
+        }
+      ],
       "classes": 15,
       "hermeticClasses": 0,
       "hermetic": 23,
@@ -302,12 +409,12 @@
       "unnamed": 0,
       "unnamedPassedTo": {},
       "validation": {
-        "filesChanged": 25,
+        "filesChanged": 26,
         "parseErrors": 0,
-        "sealedErrors": 0,
+        "hiddenInputErrors": 0,
         "unsettledFiles": 0,
         "typeErrorsIntroduced": 0,
-        "folded": 16,
+        "folded": 35,
         "roundTripSkipped": 0,
         "roundTripDiffering": 0,
         "roundTripTypeErrorsIntroduced": 0
@@ -398,9 +505,9 @@
     "tag": "effect@3.22.2",
     "lifted": {
       "source": "lifted",
-      "lifted": 2475,
-      "date": "2026-09-28T18:20:46.052Z",
-      "commit": "bd7fe96",
+      "lifted": 3110,
+      "date": "2026-10-09T01:03:06.082Z",
+      "commit": "41cc486",
       "dirty": false,
       "files": 520,
       "tests": 6243,
@@ -410,9 +517,9 @@
     },
     "unlifted": {
       "source": "unlifted",
-      "lifted": 2475,
-      "date": "2026-09-28T18:25:40.081Z",
-      "commit": "bd7fe96",
+      "lifted": 3110,
+      "date": "2026-10-09T01:06:59.709Z",
+      "commit": "41cc486",
       "dirty": false,
       "files": 520,
       "tests": 6243,
@@ -421,30 +528,30 @@
       "skipped": 10
     },
     "bench": {
-      "date": "2026-09-28T18:27:49.699Z",
-      "commit": "bd7fe96",
+      "date": "2026-10-09T01:08:35.104Z",
+      "commit": "41cc486",
       "dirty": false,
       "node": "v22.22.2",
       "processes": 4,
       "samples": 7,
       "workloads": {
         "Effect.gen, map, flatMap": {
-          "original": 84.960239,
-          "lifted": 102.68383900000003,
-          "unlifted": 92.55643000000009,
-          "control": 95.30060200000003
+          "original": 44.493566999999985,
+          "lifted": 70.376078,
+          "unlifted": 46.33626600000002,
+          "control": 44.91060700000003
         },
         "Chunk, HashMap, Option": {
-          "original": 49.97180000000026,
-          "lifted": 72.23302100000001,
-          "unlifted": 46.01706400000012,
-          "control": 47.87847099999999
+          "original": 29.103499000000284,
+          "lifted": 47.40433999999982,
+          "unlifted": 28.537657999999965,
+          "control": 28.553572999999915
         },
         "Schema decode": {
-          "original": 47.949209999999766,
-          "lifted": 56.94366200000013,
-          "unlifted": 48.238816999999926,
-          "control": 47.258350000000064
+          "original": 28.734124000000065,
+          "lifted": 32.807045000000016,
+          "unlifted": 28.13448100000005,
+          "control": 27.981079000000136
         }
       }
     }

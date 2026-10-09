@@ -81,11 +81,13 @@ Globals aren't settled either. A global can be missing, like `process` outside N
 
 ## Methods
 
-A method's `this` is the object it's called on, one of its inputs, so a method can be hermetic too. The fix marks the methods that already are, but doesn't lift the others: the lift passes a function's hidden inputs in through `this`, and a method's `this` is its object.
+A method's `this` is the object it's called on, one of its inputs, so a method can be hermetic too. {{effect.hermeticMethods}} of Effect's {{effect.methods}} methods are already hermetic, {{effect.hermeticMethodsPct}}, and the fix marks them. Most are in the internals of its runtime, such as the PubSub, the supervisors and the fiber runtime, and read nothing but their object and arguments.
 
-{{effect.hermeticMethods}} of Effect's {{effect.methods}} methods are already hermetic, {{effect.hermeticMethodsPct}}. Most are in the internals of its runtime, such as the PubSub, the supervisors and the fiber runtime, and read nothing but their object and arguments.
+Of the other {{effect.otherMethods}}, {{effect.methodsOnlyNames}} read nothing else but module-level names and globals. Most belong to the prototype objects that Effect builds its data types from. `BigDecimal`'s `toString` calls the module's `format`, its `pipe` calls `pipeArguments`, and its `[Hash.symbol]` and `[Equal.symbol]` call the `Hash` module and the module's `equals`.
 
-Of the other {{effect.otherMethods}}, {{effect.methodsOnlyNames}} read nothing else but module-level names and globals. Most belong to the prototype objects that Effect builds its data types from. `BigDecimal`'s `toString` calls the module's `format`, its `pipe` calls `pipeArguments`, and its `[Hash.symbol]` and `[Equal.symbol]` call the `Hash` module and the module's `equals`. They would be hermetic if the prototype passed those names in, as a lifted function's wrapper does. The lift can't do that for methods yet.
+The lift rewrites {{effect.liftedMethods}} of the {{effect.otherMethods}}, {{effect.liftedMethodsPctOfOthers}}: {{effect.methodsDirect}} pass their values directly and {{effect.methodsShared}} through a shared context. A method's `this` is taken by its object, so its core gets the object as its first argument, `self`, and the method becomes a wrapper that passes it. The [rule's documentation](https://github.com/bombadil-labs/hermetic/blob/main/packages/eslint-plugin-hermetic/docs/rules/prefer-hermetic.md#lifting-methods) shows the shape. The other {{effect.methodsSkipped}} are skipped, {{effect.methodsHidden}} of them because they read a member their class declares `private` or `protected`, which the core, outside the class, can't reach.
+
+<!-- method-reasons effect -->
 
 ## What the test suite caught
 

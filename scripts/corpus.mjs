@@ -779,10 +779,10 @@ const libraryOf = (file) => LIBRARIES.find((library) => library.sources.some((so
  * counted as settled. A shared lift records whether it is shared only
  * because it reads a global. An outermost function with no name, such
  * as a callback passed to another function, is not a candidate; it is
- * recorded as unnamed, with the function it is passed to. A method is a
- * candidate for marking but not for the lift, which has nowhere to put what it
- * lifts while the method's `this` is its object; one that isn't hermetic yet
- * records what stops it. Each outermost class is recorded whole.
+ * recorded as unnamed, with the function it is passed to. A method is
+ * recorded the same way, as a method; one that isn't hermetic yet also
+ * records what it reads from outside its inputs. Each outermost class is
+ * recorded whole.
  */
 function censusRecords() {
   const records = [];
@@ -838,13 +838,13 @@ function censusRecords() {
               const record = { file, name: functionName(node), line: node.loc.start.line, member, ...(method && { method }) };
               if (problems.length === 0) return void records.push({ ...record, outcome: "hermetic" });
               if (method) {
-                // What stops the method: each kind of problem, with each free variable counted by the kind of name it reads.
+                // What the method reads from outside its inputs: each kind of problem, with each free variable counted by the kind of name it reads.
                 const blockers = {};
                 for (const problem of problems) {
                   const kind = problem.messageId === "freeVariable" ? `reads ${kindOf(problem.reference) === "global" ? "a global" : "a module-level name"}` : problem.messageId;
                   blockers[kind] = (blockers[kind] ?? 0) + 1;
                 }
-                return void records.push({ ...record, outcome: "method", blockers });
+                record.blockers = blockers;
               }
               const result = tryLift(node, problems, analysis);
               if (typeof result !== "string") {
@@ -921,8 +921,11 @@ function runReport() {
   const libraries = LIBRARIES.map((library) => {
     const mine = records.filter((record) => libraryOf(record.file) === library);
     const count = (test) => mine.filter(test).length;
-    const reasons = new Map();
-    for (const record of mine.filter((r) => r.outcome === "skipped")) reasons.set(record.reason, (reasons.get(record.reason) ?? 0) + 1);
+    const reasonsOf = (skipped) => {
+      const reasons = new Map();
+      for (const record of skipped) reasons.set(record.reason, (reasons.get(record.reason) ?? 0) + 1);
+      return [...reasons].sort((a, b) => b[1] - a[1]).map(([reason, n]) => ({ reason, count: n }));
+    };
     const inLibrary = (entry) => libraryOf(entry.file) === library;
     const fixedFiles = fixed.files.filter(inLibrary);
     const roundFiles = roundtrip.files.filter(inLibrary);
@@ -945,19 +948,23 @@ function runReport() {
       name: library.name,
       packages: library.packages.map((name) => ({ name, version: PACKAGES[name] })),
       files: fixedFiles.length,
-      candidates: count((r) => !r.method && r.outcome !== "unnamed" && r.outcome !== "method" && r.outcome !== "class"),
+      candidates: count((r) => !r.method && r.outcome !== "unnamed" && r.outcome !== "class"),
       methods: count((r) => r.method),
       hermeticMethods: count((r) => r.method && r.outcome === "hermetic"),
-      methodBlockers: blockersOf(mine.filter((r) => r.outcome === "method")),
+      methodBlockers: blockersOf(mine.filter((r) => r.method && r.outcome !== "hermetic")),
+      methodsDirect: count((r) => r.method && r.outcome === "direct"),
+      methodsShared: count((r) => r.method && r.outcome === "shared"),
+      methodsSkipped: count((r) => r.method && r.outcome === "skipped"),
+      methodReasons: reasonsOf(mine.filter((r) => r.method && r.outcome === "skipped")),
       classes: count((r) => r.outcome === "class"),
       hermeticClasses: count((r) => r.outcome === "class" && r.hermetic),
       hermetic: count((r) => !r.method && r.outcome === "hermetic"),
       hermeticMembers: count((r) => r.outcome === "hermetic" && r.member),
-      direct: count((r) => r.outcome === "direct"),
-      shared: count((r) => r.outcome === "shared"),
-      sharedForGlobals: count((r) => r.forGlobals),
-      skipped: count((r) => r.outcome === "skipped"),
-      reasons: [...reasons].sort((a, b) => b[1] - a[1]).map(([reason, n]) => ({ reason, count: n })),
+      direct: count((r) => !r.method && r.outcome === "direct"),
+      shared: count((r) => !r.method && r.outcome === "shared"),
+      sharedForGlobals: count((r) => !r.method && r.forGlobals),
+      skipped: count((r) => !r.method && r.outcome === "skipped"),
+      reasons: reasonsOf(mine.filter((r) => !r.method && r.outcome === "skipped")),
       hoistedOnlyImports: count((r) => r.onlyImports),
       unnamed: count((r) => r.outcome === "unnamed"),
       unnamedPassedTo: Object.fromEntries(
@@ -1003,6 +1010,7 @@ function runReport() {
   console.log(`\nReport: ${path.relative(process.cwd(), siteData)}, at ${generated.commit}${generated.dirty ? " with uncommitted changes" : ""}`);
   for (const library of libraries) {
     console.log(`  ${library.name}: ${library.candidates} candidates, ${library.hermetic} hermetic, ${library.direct + library.shared} lifted, ${library.skipped} skipped`);
+    console.log(`    ${library.methods} methods, ${library.hermeticMethods} hermetic, ${library.methodsDirect + library.methodsShared} lifted, ${library.methodsSkipped} skipped`);
   }
   console.log(`  Crosscheck: ${crosscheck.functions} functions, ${crosscheck.moduleOnly.length} differing only where the rule sees the module, ${crosscheck.differing.length} differing otherwise`);
   const runs = { lifted: "effect", unlifted: "effect --unlift", bench: "bench" };

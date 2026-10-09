@@ -18,9 +18,9 @@ export function isFunctionNode(node: TSESTree.Node | null | undefined): node is 
 
 /**
  * A method, accessor or other class member, whose `this` is its object. It
- * can be hermetic, reading nothing but its arguments and that object, but the
- * lift doesn't split it yet. A function stored in an object literal's
- * property, `{ area: function () {} }`, is still a function.
+ * can be hermetic, reading nothing but its arguments and that object, and the
+ * lift passes that object to its core. A function stored in an object
+ * literal's property, `{ area: function () {} }`, is still a function.
  */
 export function isMethod(node: FunctionNode): boolean {
   const parent = node.parent;

@@ -102,7 +102,7 @@ The rules are documented in [the plugin's README](packages/eslint-plugin-hermeti
 | | `confine`: running a hermetic function in a Hardened JS compartment | Done |
 | | No globals: built-ins come in through `this`, and `intrinsics` picks them out of a runtime | Done |
 | | Hermetic methods and classes, and `methods` to build a class out of hermetic functions | Done |
-| | Lifting methods | Later |
+| | Lifting methods, and unlifting them | Done |
 | | `unliftPlugin`: unlifts Vite builds, with source maps into the lifted source | Done |
 
 ## Development

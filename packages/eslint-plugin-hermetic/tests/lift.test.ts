@@ -69,6 +69,7 @@ describe("tryLift", () => {
   it("says why it leaves a method alone", () => {
     expect(
       decisions(`
+        import { Imported } from "./imported";
         declare const dec: any;
         declare class Base { m(): number }
         const R = 1;
@@ -79,6 +80,8 @@ describe("tryLift", () => {
         class ThisType { thisType(this: ThisType): this { return R ? this : this; } }
         class Shadows<T> { shadows<T>(x: T) { return [x, R]; } }
         class Hidden { private p = 1; hidden() { return this.p + R; } }
+        class Destructures { constructor(protected p: number) {} destructures() { const { p } = this; return p + R; } }
+        class Inherits extends Imported { inherits() { return this.listeners + R; } }
         class Early { static { Early.early(); } static early() { return LATER; } }
         export const Expression = class Own { ownName() { return Own.name + R; } };
         class Target { target() { return new.target ?? R; } }
@@ -95,6 +98,8 @@ describe("tryLift", () => {
       thisType: "the this type",
       shadows: "a type parameter shadows its class's",
       hidden: "reads a private or protected member",
+      destructures: "reads a private or protected member",
+      inherits: "may read a protected member it inherits",
       early: "a method its statement may call before its context exists",
       ownName: "a class expression's own name",
       target: "new.target in a method",
@@ -113,10 +118,21 @@ describe("tryLift", () => {
           static own() { return new A(); }
           later() { return A.name + LATER; }
         }
+        export class Failure extends Error { describe() { return this.message + R; } }
         export const o = { size(this: { n: number }) { return this.n * LATER; } };
         const LATER = 2;
       `),
-    ).toEqual({ direct: "direct", own: "direct", later: "shared context", size: "shared context" });
+    ).toEqual({ direct: "direct", own: "direct", later: "shared context", describe: "direct", size: "shared context" });
+  });
+
+  it("leaves a function that narrows a member by a key it would lift", () => {
+    expect(
+      decisions(`
+        const KEY = Symbol();
+        export const narrows = (o: { [KEY]?: () => number }) => o[KEY] && o[KEY]();
+        export const reads = (o: { [KEY]?: () => number }) => [o[KEY], o[KEY]];
+      `),
+    ).toEqual({ narrows: "narrows by a lifted key", reads: "direct" });
   });
 
   it("names JSX", () => {

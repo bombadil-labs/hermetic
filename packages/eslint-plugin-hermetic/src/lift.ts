@@ -105,6 +105,8 @@ export type LiftBlocker =
   | "the this type"
   | "a type parameter shadows its class's"
   | "reads a private or protected member"
+  | "may read a protected member it inherits"
+  | "narrows by a lifted key"
   | "a method its statement may call before its context exists"
   | "a class expression's own name"
   | "new.target in a method"
@@ -218,6 +220,7 @@ export function tryLift(
     }
     identifiers.push(reference.identifier as TSESTree.Identifier);
   }
+  if (analysis.typescript && narrowsByLiftedKey(identifiers, analysis)) return "narrows by a lifted key";
   const direct = [...lifted.values()].every((entry) => entry.direct);
   // A function declaration can run before any statement of its module, a shared context's included.
   if (!direct && site.hoisted) return "a declaration that reads unsettled names";
@@ -383,6 +386,7 @@ function methodSite(fn: FunctionNode, analysis: Analysis): LiftSite | LiftBlocke
   }
   if (!selfParameter && ownThisTypes(fn, analysis).some((type) => !isThisPredicate(type))) return "the this type";
   if (isClassNode(holder) && readsHiddenMember(fn, holder, analysis)) return "reads a private or protected member";
+  if (isClassNode(holder) && mayReadInheritedMember(fn, holder, analysis)) return "may read a protected member it inherits";
   return { ...site, method: { member, holder, runsEarly, selfType, ...(selfParameter && { selfParameter }) } };
 }
 
@@ -513,14 +517,32 @@ function objectSelfType(
   if (parent.type === AST_NODE_TYPES.TSAsExpression) {
     const type = parent.typeAnnotation;
     const constant = type.type === AST_NODE_TYPES.TSTypeReference && type.typeName.type === AST_NODE_TYPES.Identifier && type.typeName.name === "const";
-    return constant ? undefined : raw(type);
+    return constant ? undefined : raw(thisTypeOf(type));
   }
   const declarator = plainDeclaration(object);
   if (parent.type === AST_NODE_TYPES.VariableDeclarator && parent.init === object && parent.id.type === AST_NODE_TYPES.Identifier && parent.id.typeAnnotation) {
-    return raw(parent.id.typeAnnotation.typeAnnotation);
+    return raw(thisTypeOf(parent.id.typeAnnotation.typeAnnotation));
   }
   if (declarator && (fn.returnType || member.kind === "set")) return `typeof ${declarator.id.name}`;
   return undefined;
+}
+
+/** The type an object of type `type` gives its methods' `this`: `T` for a `ThisType<T>`, alone or in an intersection. */
+function thisTypeOf(type: TSESTree.TypeNode): TSESTree.TypeNode {
+  const marker = (node: TSESTree.TypeNode): TSESTree.TypeNode | undefined =>
+    node.type === AST_NODE_TYPES.TSTypeReference &&
+    node.typeName.type === AST_NODE_TYPES.Identifier &&
+    node.typeName.name === "ThisType" &&
+    node.typeArguments?.params.length === 1
+      ? node.typeArguments.params[0]
+      : undefined;
+  if (type.type === AST_NODE_TYPES.TSIntersectionType) {
+    for (const member of type.types) {
+      const marked = marker(member);
+      if (marked) return marked;
+    }
+  }
+  return marker(type) ?? type;
 }
 
 /** The declarator whose unannotated name holds exactly `node`, so that `typeof` its name is `node`'s type. */
@@ -651,17 +673,60 @@ function readsHiddenMember(fn: FunctionNode, cls: ClassNode, analysis: Analysis)
     }
   }
   if (hidden.size === 0) return false;
-  let found = false;
+  return readMembers(fn, analysis).some((name) => hidden.has(name));
+}
+
+/**
+ * The names of the members the function reads by name, `o.name` or
+ * `const { name } = o`, and with `own`, only those of its own object.
+ */
+function readMembers(fn: FunctionNode, analysis: Analysis, own = false): string[] {
+  const names: string[] = [];
+  const key = (property: TSESTree.Property): string | undefined =>
+    property.computed ? undefined : property.key.type === AST_NODE_TYPES.Identifier ? property.key.name : staticKey(property.key);
   const visit = (node: TSESTree.Node): void => {
-    if (found) return;
-    if (node.type === AST_NODE_TYPES.MemberExpression && !node.computed && node.property.type === AST_NODE_TYPES.Identifier && hidden.has(node.property.name)) {
-      found = true;
-      return;
+    if (node.type === AST_NODE_TYPES.MemberExpression && !node.computed && node.property.type === AST_NODE_TYPES.Identifier) {
+      if (!own || node.object.type === AST_NODE_TYPES.ThisExpression) names.push(node.property.name);
+    }
+    if (node.type === AST_NODE_TYPES.VariableDeclarator && node.id.type === AST_NODE_TYPES.ObjectPattern) {
+      if (!own || node.init?.type === AST_NODE_TYPES.ThisExpression) {
+        for (const property of node.id.properties) if (property.type === AST_NODE_TYPES.Property) names.push(key(property) ?? "");
+      }
+    }
+    if (!own && node.type === AST_NODE_TYPES.ObjectPattern) {
+      for (const property of node.properties) if (property.type === AST_NODE_TYPES.Property) names.push(key(property) ?? "");
     }
     for (const child of childNodes(node, analysis.sourceCode.visitorKeys)) visit(child);
   };
   for (const part of [...fn.params, fn.body]) visit(part);
-  return found;
+  return names.filter(Boolean);
+}
+
+/**
+ * True when the class extends one from another module, and the method reads
+ * a member of its object that this module doesn't declare: it may be one the
+ * other class declares `protected`. A global class declares none.
+ */
+function mayReadInheritedMember(fn: FunctionNode, cls: ClassNode, analysis: Analysis): boolean {
+  const chain = classChain(cls, analysis);
+  const base = chain.at(-1)?.superClass;
+  if (!base) return false;
+  if (base.type === AST_NODE_TYPES.Identifier) {
+    const variable = ASTUtils.findVariable(analysis.sourceCode.getScope(base), base);
+    if (!variable || variable.defs.every(isAmbient)) return false;
+  }
+  const declared = new Set<string>();
+  for (const element of chain.flatMap((link) => link.body.body)) {
+    if ("key" in element && !element.computed && element.key.type === AST_NODE_TYPES.Identifier) declared.add(element.key.name);
+    if (element.type === AST_NODE_TYPES.MethodDefinition && element.kind === "constructor") {
+      for (const param of element.value.params) {
+        if (param.type !== AST_NODE_TYPES.TSParameterProperty) continue;
+        const target = param.parameter.type === AST_NODE_TYPES.AssignmentPattern ? param.parameter.left : param.parameter;
+        if (target.type === AST_NODE_TYPES.Identifier) declared.add(target.name);
+      }
+    }
+  }
+  return readMembers(fn, analysis, true).some((name) => !declared.has(name));
 }
 
 /** The class and the classes it extends, as far as this module declares them. */
@@ -683,6 +748,46 @@ function readableByOuterName(holder: ClassNode | TSESTree.ObjectExpression, anal
   if (holder.type !== AST_NODE_TYPES.ClassDeclaration || !holder.id) return false;
   const variable = analysis.sourceCode.scopeManager?.acquire(holder)?.upper?.set.get(holder.id.name);
   return variable !== undefined && variable.references.every((reference) => !reference.isWrite() || reference.init === true);
+}
+
+/**
+ * True when a lifted name is the key of a member the function reads twice,
+ * once in a test: TypeScript narrows `o[KEY]` across a test, but not
+ * `o[this.KEY]`, so `o[KEY] && o[KEY]()` would stop type-checking.
+ */
+function narrowsByLiftedKey(identifiers: readonly TSESTree.Identifier[], analysis: Analysis): boolean {
+  const text = analysis.sourceCode.text;
+  const accesses = new Map<string, TSESTree.MemberExpression[]>();
+  for (const identifier of identifiers) {
+    const member = identifier.parent;
+    if (member.type !== AST_NODE_TYPES.MemberExpression || !member.computed || member.property !== identifier) continue;
+    const key = text.slice(member.range[0], member.range[1]);
+    accesses.set(key, [...(accesses.get(key) ?? []), member]);
+  }
+  const tested = (node: TSESTree.Node): boolean => {
+    for (let child = node, parent = node.parent; parent; child = parent, parent = parent.parent) {
+      switch (parent.type) {
+        case AST_NODE_TYPES.LogicalExpression:
+          if (parent.left === child) return true;
+          break;
+        case AST_NODE_TYPES.IfStatement:
+        case AST_NODE_TYPES.ConditionalExpression:
+        case AST_NODE_TYPES.WhileStatement:
+        case AST_NODE_TYPES.DoWhileStatement:
+        case AST_NODE_TYPES.ForStatement:
+          return parent.test === child;
+        case AST_NODE_TYPES.UnaryExpression:
+        case AST_NODE_TYPES.BinaryExpression:
+        case AST_NODE_TYPES.ChainExpression:
+        case AST_NODE_TYPES.TSNonNullExpression:
+          break;
+        default:
+          return false;
+      }
+    }
+    return false;
+  };
+  return [...accesses.values()].some((members) => members.length > 1 && members.some(tested));
 }
 
 /** Problems the lift cannot resolve, by the reason they give. */

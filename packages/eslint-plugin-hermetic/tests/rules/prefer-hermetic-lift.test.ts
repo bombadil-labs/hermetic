@@ -648,6 +648,11 @@ describe("lifted code type-checks", () => {
       `export const square = { n: 2, area() { return this.n * this.n * R; } } as Shape;`,
       `export const typed: Shape = { n: 3, area() { return this.n * R; }, scale(k: number) { return { ...this, n: this.n * k * R }; } };`,
     ].join("\n"),
+    "an object literal typed by ThisType": [
+      `const R = 1;`,
+      `interface Thing { name: string; describe(): string }`,
+      `export const proto: ThisType<Thing> & { describe(): string } = { describe() { return this.name + R; } };`,
+    ].join("\n"),
     "a protected member a class reads through itself, by a computed key": [
       `const R = 1;`,
       `export class Sub { protected q = 2; walk() { return this["q"] + R; } }`,

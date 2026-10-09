@@ -32,6 +32,8 @@ export interface Problem {
 export interface Analysis {
   readonly sourceCode: Readonly<TSESLint.SourceCode>;
   readonly structuralOnly: boolean;
+  /** The file is TypeScript, so code the lift writes carries types. */
+  readonly typescript: boolean;
 }
 
 /** Options shared by every rule, settable per rule or once in `settings.hermetic`. */
@@ -59,6 +61,7 @@ export function createAnalysis(
   return {
     sourceCode: context.sourceCode,
     structuralOnly: (options.types ?? settings.types) === "structural-only",
+    typescript: /\.[cm]?tsx?$/.test(context.filename),
   };
 }
 
@@ -284,7 +287,7 @@ export function isAmbient(def: Definition): boolean {
 }
 
 /** Nodes that set their own `this`, `new.target` and `super` for `child`. */
-function isThisBoundary(ancestor: TSESTree.Node, child: TSESTree.Node): boolean {
+export function isThisBoundary(ancestor: TSESTree.Node, child: TSESTree.Node): boolean {
   switch (ancestor.type) {
     case AST_NODE_TYPES.FunctionDeclaration:
     case AST_NODE_TYPES.FunctionExpression:

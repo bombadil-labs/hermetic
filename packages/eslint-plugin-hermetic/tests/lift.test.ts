@@ -49,7 +49,7 @@ describe("tryLift", () => {
       decisions(`
         import { clamp } from "./clamp";
         const R = 1;
-        class A { m() { return R; } }
+        class A { #x = 1; m() { return this.#x + R; } }
         export const o = { member: (x: number) => x * R };
         export const typed: (x: number) => number = (x) => x * R;
         export function hoisted(x: number) { return clamp(x); }
@@ -57,13 +57,66 @@ describe("tryLift", () => {
         export const own = () => this.x + R;
       `),
     ).toEqual({
-      m: "a method",
+      m: "a private name",
       member: "an object member",
       typed: "a typed variable",
       hoisted: "a declaration that reads unsettled names",
       stack: "reads the stack",
       own: "lexical this or new.target",
     });
+  });
+
+  it("says why it leaves a method alone", () => {
+    expect(
+      decisions(`
+        declare const dec: any;
+        declare class Base { m(): number }
+        const R = 1;
+        class Field { field = () => R; }
+        class Decorated { @dec decorated() { return R; } }
+        export default { anonymous() { return R; } };
+        export const typed: { untyped(x: number): number } = { untyped(x) { return x + R; } };
+        class ThisType { thisType(this: ThisType): this { return R ? this : this; } }
+        class Shadows<T> { shadows<T>(x: T) { return [x, R]; } }
+        class Hidden { private p = 1; hidden() { return this.p + R; } }
+        class Early { static { Early.early(); } static early() { return LATER; } }
+        export const Expression = class Own { ownName() { return Own.name + R; } };
+        class Target { target() { return new.target ?? R; } }
+        class Sub extends Base { sup() { return super.m() + R; } }
+        { class Blocked { blocked() { return R; } } }
+        class Asserts { asserts(x: unknown): asserts x { if (!R) throw x; } }
+        const LATER = 2;
+      `),
+    ).toEqual({
+      field: "a class field",
+      decorated: "a decorated method",
+      anonymous: "its object's type has no name",
+      untyped: "a parameter typed by its object",
+      thisType: "the this type",
+      shadows: "a type parameter shadows its class's",
+      hidden: "reads a private or protected member",
+      early: "a method its statement may call before its context exists",
+      ownName: "a class expression's own name",
+      target: "new.target in a method",
+      sup: "super",
+      blocked: "not declared at module level",
+      asserts: "a this parameter or asserts",
+    });
+  });
+
+  it("says how it lifts a method", () => {
+    expect(
+      decisions(`
+        const R = 1;
+        export class A {
+          direct() { return R; }
+          static own() { return new A(); }
+          later() { return A.name + LATER; }
+        }
+        export const o = { size(this: { n: number }) { return this.n * LATER; } };
+        const LATER = 2;
+      `),
+    ).toEqual({ direct: "direct", own: "direct", later: "shared context", size: "shared context" });
   });
 
   it("names JSX", () => {

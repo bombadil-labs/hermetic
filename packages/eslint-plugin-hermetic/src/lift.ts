@@ -1,7 +1,7 @@
 import { AST_NODE_TYPES, AST_TOKEN_TYPES, ASTUtils, type TSESLint, type TSESTree } from "@typescript-eslint/utils";
-import { applyEdits, arrowToken, childNodes, type Edit, LINE_BREAK, looseComments, parameterSpan, renderComments } from "./ast.ts";
-import { type Analysis, isAmbient, isTypeOnly, type MessageIds, type Problem } from "./analysis.ts";
-import { directiveInsertion, type FunctionNode, isFunctionNode, isMarkedHermetic, isMethod } from "./marking.ts";
+import { applyEdits, arrowToken, childNodes, codeLineStarts, type Edit, LINE_BREAK, looseComments, parameterSpan, renderComments } from "./ast.ts";
+import { type Analysis, isAmbient, isThisBoundary, isTypeOnly, type MessageIds, type Problem } from "./analysis.ts";
+import { type ClassNode, directiveInsertion, type FunctionNode, isFunctionNode, isMarkedHermetic, isMethod, staticKey } from "./marking.ts";
 
 type Reference = TSESLint.Scope.Reference;
 type SourceCode = Readonly<TSESLint.SourceCode>;
@@ -45,6 +45,8 @@ interface Lifted {
    * in the core get this type spelled out.
    */
   readonly widened?: string;
+  /** A method's own class, by the name it has inside its body: always initialized when a method of it runs. */
+  readonly ownClass?: boolean;
 }
 
 export interface LiftPlan {
@@ -60,13 +62,53 @@ export interface LiftPlan {
    * value can be passed directly, in a fresh object literal.
    */
   readonly contextName?: string;
+  /** For a method, how its object reaches the core. */
+  readonly method?: MethodPlan;
+}
+
+/**
+ * A method's lift. The core's `this` is its context, as for a function, so the
+ * wrapper passes its object as the core's first argument, `self`, and its
+ * `arguments` object next when the method reads it.
+ */
+export interface MethodPlan {
+  readonly member: TSESTree.MethodDefinition | TSESTree.Property;
+  readonly kind: "method" | "get" | "set";
+  readonly selfName: string;
+  readonly argumentsName?: string;
+  /** With TypeScript, the type of `self`. */
+  readonly selfType?: string;
+  /**
+   * For a class's instance method in TypeScript: a type parameter that stands
+   * for the polymorphic `this`, as the class's own type parameters follow it,
+   * and the type arguments the wrapper passes for them.
+   */
+  readonly selfParameter?: { readonly name: string; readonly declarations: readonly string[]; readonly arguments: readonly string[] };
+  /** The method's `this` parameter, which `self` replaces in the core. */
+  readonly thisParameter?: TSESTree.Identifier;
+  /** Every `this` that is the method's own, which reads `self` in the core. */
+  readonly thisExpressions: readonly TSESTree.ThisExpression[];
+  /** Every read of the method's own `arguments`. */
+  readonly argumentReads: readonly TSESTree.Identifier[];
+  /** Every `this` type that is the method's own, which reads the `Self` type parameter in the core. */
+  readonly thisTypes: readonly TSESTree.TSThisType[];
 }
 
 /** Why a function was not lifted: the first check it failed. */
 export type LiftBlocker =
   | "structural-only types"
-  /** A method or accessor: its `this` is its object, so the lift has nowhere to put what it lifts yet. */
-  | "a method"
+  | "a class field"
+  | "a decorated method"
+  | "its object's type has no name"
+  | "a parameter typed by its object"
+  | "arguments in sloppy mode"
+  | "the this type"
+  | "a type parameter shadows its class's"
+  | "reads a private or protected member"
+  | "a method its statement may call before its context exists"
+  | "a class expression's own name"
+  | "new.target in a method"
+  | "a private name"
   | "an object member"
   | "not declared at module level"
   | "a named function expression"
@@ -101,8 +143,9 @@ export function planLift(
   problems: readonly Problem[],
   analysis: Analysis,
   assumptions: LiftAssumptions = {},
+  taken?: Set<string>,
 ): LiftPlan | undefined {
-  const result = tryLift(fn, problems, analysis, assumptions);
+  const result = tryLift(fn, problems, analysis, assumptions, taken);
   return typeof result === "string" ? undefined : result;
 }
 
@@ -117,17 +160,25 @@ export interface LiftAssumptions {
   readonly importsSettled?: boolean;
 }
 
-/** The lift's plan for `fn`, or the reason it has none. */
+/**
+ * The lift's plan for `fn`, or the reason it has none. `taken` holds the names
+ * other lifts in the module have chosen, and gets the names this one chooses:
+ * two methods can share a name, and their cores must not.
+ */
 export function tryLift(
   fn: FunctionNode,
   problems: readonly Problem[],
   analysis: Analysis,
   assumptions: LiftAssumptions = {},
+  taken?: Set<string>,
 ): LiftPlan | LiftBlocker {
   if (analysis.structuralOnly) return "structural-only types";
-  const site = liftSite(fn);
+  const site = isMethod(fn) ? methodSite(fn, analysis) : liftSite(fn);
   if (typeof site === "string") return site;
-  if (usesOwnReceiver(fn, analysis)) return "uses its own this, arguments or new.target";
+  // A method keeps its `this` and `arguments`: the wrapper passes them to the core.
+  if (site.method ? readsNewTarget(fn, analysis) : usesOwnReceiver(fn, analysis)) {
+    return site.method ? "new.target in a method" : "uses its own this, arguments or new.target";
+  }
   if (suppressesTypeErrors(fn, analysis)) return "suppresses type errors";
   if (defaultReadsPattern(fn)) return "a default reads a destructured parameter";
   if (defaultMayRunTwice(fn, analysis)) return "a default calls a function";
@@ -170,9 +221,16 @@ export function tryLift(
   const direct = [...lifted.values()].every((entry) => entry.direct);
   // A function declaration can run before any statement of its module, a shared context's included.
   if (!direct && site.hoisted) return "a declaration that reads unsettled names";
-  const coreName = freshName(`${site.name}Hermetic`, analysis, fn);
-  const contextName = direct ? undefined : freshName(`${site.name}Context`, analysis, fn);
-  return { fn, coreName, statement: site.statement, lifted, identifiers, contextName };
+  if (site.method) {
+    // The context is declared after the statement that holds the method.
+    if (!direct && site.method.runsEarly) return "a method its statement may call before its context exists";
+    // A shared context, and the core's type for its context, name the class from outside it, which only a declaration's name can.
+    const ownClass = [...lifted.values()].some((entry) => entry.ownClass);
+    if (ownClass && (analysis.typescript || !direct) && !readableByOuterName(site.method.holder, analysis)) return "a class expression's own name";
+  }
+  const coreName = freshName(`${site.name}Hermetic`, analysis, fn, taken);
+  const contextName = direct ? undefined : freshName(`${site.name}Context`, analysis, fn, taken);
+  return { fn, coreName, statement: site.statement, lifted, identifiers, contextName, ...(site.method && { method: methodPlan(fn, site.method, analysis) }) };
 }
 
 interface LiftSite {
@@ -181,12 +239,26 @@ interface LiftSite {
   readonly statement: TSESTree.Node;
   /** A function declaration, callable before any statement of its module has run. */
   readonly hoisted: boolean;
+  /** For a method, what holds it and what its object is. */
+  readonly method?: MethodSite;
+}
+
+interface MethodSite {
+  readonly member: TSESTree.MethodDefinition | TSESTree.Property;
+  /** The class or object literal that holds the method. */
+  readonly holder: ClassNode | TSESTree.ObjectExpression;
+  /**
+   * The statement may call the method before it has finished: a class's static
+   * initializers, or a function the class or object is passed to, can.
+   */
+  readonly runsEarly: boolean;
+  readonly selfType?: string;
+  readonly selfParameter?: MethodPlan["selfParameter"];
 }
 
 /** Only module-level declarations and single `const`/`let` initializers keep their callers intact. */
 function liftSite(fn: FunctionNode): LiftSite | LiftBlocker {
   const parent = fn.parent;
-  if (isMethod(fn)) return "a method";
   if (
     parent.type === AST_NODE_TYPES.Property ||
     parent.type === AST_NODE_TYPES.MethodDefinition ||
@@ -225,8 +297,397 @@ function liftSite(fn: FunctionNode): LiftSite | LiftBlocker {
   return "not declared at module level";
 }
 
+/**
+ * A method in a class or an object literal that a module-level statement
+ * holds. The core gets its object as `self`, so with TypeScript the lift must
+ * be able to name its object's type: a class by its name, an object literal by
+ * the type its declaration or an `as` gives it, or either by the method's own
+ * `this` parameter.
+ */
+function methodSite(fn: FunctionNode, analysis: Analysis): LiftSite | LiftBlocker {
+  const member = fn.parent;
+  if (member.type !== AST_NODE_TYPES.MethodDefinition && member.type !== AST_NODE_TYPES.Property) return "a class field";
+  if (member.type === AST_NODE_TYPES.MethodDefinition && member.decorators.length > 0) return "a decorated method";
+  const holder = member.type === AST_NODE_TYPES.MethodDefinition ? member.parent.parent : member.parent;
+  if (holder.type === AST_NODE_TYPES.ObjectPattern) return "not declared at module level";
+  let runsEarly = isClassNode(holder) && classRunsCode(holder);
+  let statement: TSESTree.Node | undefined;
+  for (let node: TSESTree.Node = holder; node.parent; node = node.parent) {
+    if (node.parent.type === AST_NODE_TYPES.Program) {
+      statement = node;
+      break;
+    }
+    // The core is declared at module level, where a block's names and an outer class's type parameters are out of scope.
+    if (opensScope(node.parent)) return "not declared at module level";
+    if (!holdsWithoutRunning(node.parent, node)) runsEarly = true;
+  }
+  if (!statement) return "not declared at module level";
+  const scope = analysis.sourceCode.scopeManager?.acquire(fn, true);
+  // In sloppy mode `arguments` tracks the parameters of the function it belongs to, which would be the wrapper.
+  if (scope && !scope.isStrict && (scope.set.get("arguments")?.references.length ?? 0) > 0) return "arguments in sloppy mode";
+  const returns = fn.returnType?.typeAnnotation;
+  if (returns?.type === AST_NODE_TYPES.TSTypePredicate && returns.asserts) return "a this parameter or asserts";
+  const outerName = isClassNode(holder) && holder.type === AST_NODE_TYPES.ClassDeclaration ? holder.id?.name : declaredName(holder);
+  const holderName = outerName ?? (isClassNode(holder) ? holder.id?.name : undefined);
+  const prefix = member.kind === "get" ? "Get" : member.kind === "set" ? "Set" : "";
+  const label = `${prefix}${identifierWords(keyLabel(member, analysis.sourceCode))}`;
+  const name = holderName ? `${holderName}${label}` : label.charAt(0).toLowerCase() + label.slice(1);
+  const site = { name: /^[A-Za-z_$]/.test(name) ? name : `_${name}`, statement, hoisted: false };
+  if (!analysis.typescript) return { ...site, method: { member, holder, runsEarly } };
+
+  const text = analysis.sourceCode.text;
+  const raw = (node: TSESTree.Node): string => text.slice(node.range[0], node.range[1]);
+  const thisParameter = thisParameterOf(fn);
+  // A parameter without a type can take one from its object: a setter's from its getter, an object method's from the object's type.
+  if (fn.params.some((param) => param !== thisParameter && untyped(param)) && (member.kind === "set" || !isClassNode(holder))) {
+    return "a parameter typed by its object";
+  }
+  let selfType: string;
+  let selfParameter: MethodPlan["selfParameter"];
+  if (thisParameter) {
+    if (!thisParameter.typeAnnotation) return "its object's type has no name";
+    selfType = raw(thisParameter.typeAnnotation.typeAnnotation);
+  } else if (isClassNode(holder)) {
+    const typeName = holder.type === AST_NODE_TYPES.ClassDeclaration ? holder.id?.name : plainDeclaration(holder)?.id.name;
+    if (!typeName) return "its object's type has no name";
+    if (member.type === AST_NODE_TYPES.MethodDefinition && member.static) {
+      selfType = `typeof ${typeName}`;
+    } else {
+      // The polymorphic `this` of a class is a type parameter, so the core declares one, constrained by the class.
+      const classParameters = holder.typeParameters?.params ?? [];
+      let constraint: string;
+      if (holder.type === AST_NODE_TYPES.ClassDeclaration) {
+        constraint = classParameters.length > 0 ? `${typeName}<${classParameters.map((param) => param.name.name).join(", ")}>` : typeName;
+      } else if (classParameters.length === 0) {
+        constraint = `InstanceType<typeof ${typeName}>`;
+      } else {
+        return "its object's type has no name";
+      }
+      const own = new Set(classParameters.map((param) => param.name.name));
+      if (fn.typeParameters?.params.some((param) => own.has(param.name.name))) return "a type parameter shadows its class's";
+      const selfName = freshIdentifier("Self", [holder.id, holder.typeParameters, fn], analysis);
+      selfParameter = {
+        name: selfName,
+        declarations: [
+          `${selfName} extends ${constraint}`,
+          ...classParameters.map((param) => `${param.name.name}${param.constraint ? ` extends ${raw(param.constraint)}` : ""}`),
+        ],
+        arguments: ["this", ...own],
+      };
+      selfType = selfName;
+    }
+  } else {
+    const declared = objectSelfType(holder, fn, member, raw);
+    if (!declared) return "its object's type has no name";
+    selfType = declared;
+  }
+  if (!selfParameter && ownThisTypes(fn, analysis).some((type) => !isThisPredicate(type))) return "the this type";
+  if (isClassNode(holder) && readsHiddenMember(fn, holder, analysis)) return "reads a private or protected member";
+  return { ...site, method: { member, holder, runsEarly, selfType, ...(selfParameter && { selfParameter }) } };
+}
+
+/** What the fix needs to move a method's body into its core. */
+function methodPlan(fn: FunctionNode, site: MethodSite, analysis: Analysis): MethodPlan {
+  const scope = analysis.sourceCode.scopeManager?.acquire(fn, true);
+  const argumentReads = (scope?.set.get("arguments")?.references ?? []).map((reference) => reference.identifier as TSESTree.Identifier);
+  const thisParameter = thisParameterOf(fn);
+  const member = site.member;
+  return {
+    member,
+    kind: member.kind === "get" || member.kind === "set" ? member.kind : "method",
+    selfName: freshIdentifier("self", [fn], analysis),
+    ...(argumentReads.length > 0 && { argumentsName: freshIdentifier("args", [fn], analysis) }),
+    ...(site.selfType !== undefined && { selfType: site.selfType }),
+    ...(site.selfParameter && { selfParameter: site.selfParameter }),
+    ...(thisParameter && { thisParameter }),
+    thisExpressions: ownThisExpressions(fn, analysis),
+    argumentReads,
+    // Without a `Self` type parameter, only a `this is T` return type names the object.
+    thisTypes: ownThisTypes(fn, analysis).filter((type) => site.selfParameter !== undefined || isThisPredicate(type)),
+  };
+}
+
+function isClassNode(node: TSESTree.Node): node is ClassNode {
+  return node.type === AST_NODE_TYPES.ClassDeclaration || node.type === AST_NODE_TYPES.ClassExpression;
+}
+
+function thisParameterOf(fn: FunctionNode): TSESTree.Identifier | undefined {
+  const first = fn.params[0];
+  return first?.type === AST_NODE_TYPES.Identifier && first.name === "this" ? first : undefined;
+}
+
+/**
+ * True when `parent` holds `child` without running code that could call a
+ * method in it: a declaration, an export, a type assertion, or an object or
+ * array literal around it.
+ */
+function holdsWithoutRunning(parent: TSESTree.Node, child: TSESTree.Node): boolean {
+  switch (parent.type) {
+    case AST_NODE_TYPES.VariableDeclaration:
+    case AST_NODE_TYPES.ExportNamedDeclaration:
+    case AST_NODE_TYPES.ExportDefaultDeclaration:
+    case AST_NODE_TYPES.TSAsExpression:
+    case AST_NODE_TYPES.TSSatisfiesExpression:
+    case AST_NODE_TYPES.TSNonNullExpression:
+    case AST_NODE_TYPES.ArrayExpression:
+    case AST_NODE_TYPES.ObjectExpression:
+      return true;
+    case AST_NODE_TYPES.VariableDeclarator:
+      return parent.init === child;
+    case AST_NODE_TYPES.Property:
+      return parent.value === child && !parent.computed;
+    default:
+      return false;
+  }
+}
+
+/** True when defining the class runs code that could call its methods: a static block, a static initializer, a decorator. */
+function classRunsCode(cls: ClassNode): boolean {
+  if (cls.decorators.length > 0) return true;
+  return cls.body.body.some(
+    (element) =>
+      element.type === AST_NODE_TYPES.StaticBlock ||
+      ("decorators" in element && element.decorators.length > 0) ||
+      ((element.type === AST_NODE_TYPES.PropertyDefinition || element.type === AST_NODE_TYPES.AccessorProperty) &&
+        element.static &&
+        element.value !== null &&
+        !isInert(element.value)),
+  );
+}
+
+/** An expression whose evaluation runs no code: literals, names, functions, and literals of those. */
+function isInert(node: TSESTree.Node): boolean {
+  switch (node.type) {
+    case AST_NODE_TYPES.Literal:
+    case AST_NODE_TYPES.Identifier:
+    case AST_NODE_TYPES.ArrowFunctionExpression:
+    case AST_NODE_TYPES.FunctionExpression:
+      return true;
+    case AST_NODE_TYPES.TemplateLiteral:
+      return node.expressions.length === 0;
+    case AST_NODE_TYPES.UnaryExpression:
+      return node.operator !== "delete" && isInert(node.argument);
+    case AST_NODE_TYPES.TSAsExpression:
+    case AST_NODE_TYPES.TSSatisfiesExpression:
+    case AST_NODE_TYPES.TSNonNullExpression:
+      return isInert(node.expression);
+    case AST_NODE_TYPES.ArrayExpression:
+      return node.elements.every((element) => element === null || isInert(element));
+    case AST_NODE_TYPES.ObjectExpression:
+      return node.properties.every((property) => property.type === AST_NODE_TYPES.Property && !property.computed && isInert(property.value));
+    default:
+      return false;
+  }
+}
+
+/** The name a declaration gives the class or object, through any type assertions around it. */
+function declaredName(node: TSESTree.Node): string | undefined {
+  let child = node;
+  let parent = node.parent;
+  while (
+    parent &&
+    (parent.type === AST_NODE_TYPES.TSAsExpression || parent.type === AST_NODE_TYPES.TSSatisfiesExpression || parent.type === AST_NODE_TYPES.TSNonNullExpression)
+  ) {
+    child = parent;
+    parent = parent.parent;
+  }
+  return parent?.type === AST_NODE_TYPES.VariableDeclarator && parent.init === child && parent.id.type === AST_NODE_TYPES.Identifier
+    ? parent.id.name
+    : undefined;
+}
+
+/**
+ * The type of an object literal's methods' `this`: the type its declaration's
+ * annotation or an `as` gives it. Without one, `this` is the literal's own
+ * type, which the core reads as `typeof` its constant. That type includes the
+ * method's, so the method must spell out what it returns, or the two types
+ * would depend on each other.
+ */
+function objectSelfType(
+  object: TSESTree.ObjectExpression,
+  fn: FunctionNode,
+  member: TSESTree.MethodDefinition | TSESTree.Property,
+  raw: (node: TSESTree.Node) => string,
+): string | undefined {
+  const parent = object.parent;
+  if (parent.type === AST_NODE_TYPES.TSAsExpression) {
+    const type = parent.typeAnnotation;
+    const constant = type.type === AST_NODE_TYPES.TSTypeReference && type.typeName.type === AST_NODE_TYPES.Identifier && type.typeName.name === "const";
+    return constant ? undefined : raw(type);
+  }
+  const declarator = plainDeclaration(object);
+  if (parent.type === AST_NODE_TYPES.VariableDeclarator && parent.init === object && parent.id.type === AST_NODE_TYPES.Identifier && parent.id.typeAnnotation) {
+    return raw(parent.id.typeAnnotation.typeAnnotation);
+  }
+  if (declarator && (fn.returnType || member.kind === "set")) return `typeof ${declarator.id.name}`;
+  return undefined;
+}
+
+/** The declarator whose unannotated name holds exactly `node`, so that `typeof` its name is `node`'s type. */
+function plainDeclaration(node: TSESTree.Node): (TSESTree.VariableDeclarator & { id: TSESTree.Identifier }) | undefined {
+  const parent = node.parent;
+  if (parent?.type !== AST_NODE_TYPES.VariableDeclarator || parent.init !== node) return undefined;
+  if (parent.id.type !== AST_NODE_TYPES.Identifier || parent.id.typeAnnotation) return undefined;
+  return parent as TSESTree.VariableDeclarator & { id: TSESTree.Identifier };
+}
+
+/** True for a node whose names, or type parameters, the module scope does not see. */
+function opensScope(node: TSESTree.Node): boolean {
+  switch (node.type) {
+    case AST_NODE_TYPES.BlockStatement:
+    case AST_NODE_TYPES.StaticBlock:
+    case AST_NODE_TYPES.SwitchStatement:
+    case AST_NODE_TYPES.ForStatement:
+    case AST_NODE_TYPES.ForInStatement:
+    case AST_NODE_TYPES.ForOfStatement:
+    case AST_NODE_TYPES.CatchClause:
+    case AST_NODE_TYPES.TSModuleBlock:
+      return true;
+    case AST_NODE_TYPES.ClassDeclaration:
+    case AST_NODE_TYPES.ClassExpression:
+      return node.typeParameters !== undefined;
+    default:
+      return false;
+  }
+}
+
+/** True for the `this` of a `this is T` return type, which names the method's object. */
+function isThisPredicate(node: TSESTree.TSThisType): boolean {
+  return node.parent.type === AST_NODE_TYPES.TSTypePredicate && node.parent.parameterName === node;
+}
+
+function untyped(param: TSESTree.Parameter): boolean {
+  switch (param.type) {
+    case AST_NODE_TYPES.AssignmentPattern:
+      return false;
+    case AST_NODE_TYPES.TSParameterProperty:
+      return false;
+    default:
+      return !param.typeAnnotation;
+  }
+}
+
+/** A member's key as a label for its core's name: `size`, `Hash.symbol`, `Symbol.iterator`. */
+function keyLabel(member: TSESTree.MethodDefinition | TSESTree.Property, sourceCode: SourceCode): string {
+  const key = member.key;
+  if (key.type === AST_NODE_TYPES.PrivateIdentifier) return key.name;
+  if (!member.computed && key.type === AST_NODE_TYPES.Identifier) return key.name;
+  return staticKey(key) ?? sourceCode.text.slice(key.range[0], key.range[1]);
+}
+
+/** `Hash.symbol` as `HashSymbol`: the words of a label, joined into an identifier. */
+function identifierWords(label: string): string {
+  const words = label.split(/[^A-Za-z0-9_$]+/).filter(Boolean);
+  const joined = words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join("");
+  return joined || "Member";
+}
+
+/** `base`, or `_base`, `__base` and so on: the first that no identifier inside `nodes` spells. */
+function freshIdentifier(base: string, nodes: readonly (TSESTree.Node | null | undefined)[], analysis: Analysis): string {
+  const taken = new Set<string>();
+  const visit = (node: TSESTree.Node): void => {
+    if (node.type === AST_NODE_TYPES.Identifier) taken.add(node.name);
+    for (const child of childNodes(node, analysis.sourceCode.visitorKeys)) visit(child);
+  };
+  for (const node of nodes) if (node) visit(node);
+  let name = base;
+  while (taken.has(name)) name = `_${name}`;
+  return name;
+}
+
+/** Every `this` whose value is the method's own: not inside a nested function, static block or field. */
+function ownThisExpressions(fn: FunctionNode, analysis: Analysis): TSESTree.ThisExpression[] {
+  const found: TSESTree.ThisExpression[] = [];
+  const visit = (node: TSESTree.Node, parent?: TSESTree.Node): void => {
+    if (parent && isThisBoundary(parent, node)) return;
+    if (node.type === AST_NODE_TYPES.ThisExpression) found.push(node);
+    for (const child of childNodes(node, analysis.sourceCode.visitorKeys)) visit(child, node);
+  };
+  for (const part of [...fn.params, fn.body]) visit(part);
+  return found;
+}
+
+/** Every `this` type that is the method's own: not inside a nested class, interface or object type. */
+function ownThisTypes(fn: FunctionNode, analysis: Analysis): TSESTree.TSThisType[] {
+  const found: TSESTree.TSThisType[] = [];
+  const visit = (node: TSESTree.Node): void => {
+    if (node.type === AST_NODE_TYPES.ClassBody || node.type === AST_NODE_TYPES.TSInterfaceBody || node.type === AST_NODE_TYPES.TSTypeLiteral) return;
+    if (node.type === AST_NODE_TYPES.TSThisType) found.push(node);
+    for (const child of childNodes(node, analysis.sourceCode.visitorKeys)) visit(child);
+  };
+  for (const part of [fn.typeParameters, ...fn.params, fn.returnType, fn.body]) if (part) visit(part);
+  return found;
+}
+
+/** True when `new.target` in the method's body is its own: the core would not see it. */
+function readsNewTarget(fn: FunctionNode, analysis: Analysis): boolean {
+  let found = false;
+  const visit = (node: TSESTree.Node, parent?: TSESTree.Node): void => {
+    if (found || (parent && isThisBoundary(parent, node))) return;
+    if (node.type === AST_NODE_TYPES.MetaProperty && node.meta.name === "new") found = true;
+    for (const child of childNodes(node, analysis.sourceCode.visitorKeys)) visit(child, node);
+  };
+  for (const part of [...fn.params, fn.body]) visit(part);
+  return found;
+}
+
+/**
+ * True when the method reads a member that its class, or a class it extends
+ * in this module, declares `private` or `protected`: TypeScript lets only the
+ * classes reach it, and the core is outside them.
+ */
+function readsHiddenMember(fn: FunctionNode, cls: ClassNode, analysis: Analysis): boolean {
+  const hidden = new Set<string>();
+  for (const element of classChain(cls, analysis).flatMap((link) => link.body.body)) {
+    if ("accessibility" in element && (element.accessibility === "private" || element.accessibility === "protected")) {
+      if ("key" in element && !element.computed && element.key.type === AST_NODE_TYPES.Identifier) hidden.add(element.key.name);
+    }
+    if (element.type === AST_NODE_TYPES.MethodDefinition && element.kind === "constructor") {
+      for (const param of element.value.params) {
+        if (param.type !== AST_NODE_TYPES.TSParameterProperty || (param.accessibility !== "private" && param.accessibility !== "protected")) continue;
+        const target = param.parameter.type === AST_NODE_TYPES.AssignmentPattern ? param.parameter.left : param.parameter;
+        if (target.type === AST_NODE_TYPES.Identifier) hidden.add(target.name);
+      }
+    }
+  }
+  if (hidden.size === 0) return false;
+  let found = false;
+  const visit = (node: TSESTree.Node): void => {
+    if (found) return;
+    if (node.type === AST_NODE_TYPES.MemberExpression && !node.computed && node.property.type === AST_NODE_TYPES.Identifier && hidden.has(node.property.name)) {
+      found = true;
+      return;
+    }
+    for (const child of childNodes(node, analysis.sourceCode.visitorKeys)) visit(child);
+  };
+  for (const part of [...fn.params, fn.body]) visit(part);
+  return found;
+}
+
+/** The class and the classes it extends, as far as this module declares them. */
+function classChain(cls: ClassNode, analysis: Analysis): ClassNode[] {
+  const chain: ClassNode[] = [];
+  for (let link: ClassNode | undefined = cls; link && !chain.includes(link); ) {
+    chain.push(link);
+    const superClass: TSESTree.Node | null = link.superClass;
+    if (superClass?.type !== AST_NODE_TYPES.Identifier) break;
+    const variable = ASTUtils.findVariable(analysis.sourceCode.getScope(superClass), superClass);
+    const node = variable?.defs.length === 1 ? variable.defs[0]?.node : undefined;
+    link = node && isClassNode(node) ? node : node?.type === AST_NODE_TYPES.VariableDeclarator && node.init && isClassNode(node.init) ? node.init : undefined;
+  }
+  return chain;
+}
+
+/** True when the class can be read by its name from outside it: a declaration whose name the module never reassigns. */
+function readableByOuterName(holder: ClassNode | TSESTree.ObjectExpression, analysis: Analysis): boolean {
+  if (holder.type !== AST_NODE_TYPES.ClassDeclaration || !holder.id) return false;
+  const variable = analysis.sourceCode.scopeManager?.acquire(holder)?.upper?.set.get(holder.id.name);
+  return variable !== undefined && variable.references.every((reference) => !reference.isWrite() || reference.init === true);
+}
+
 /** Problems the lift cannot resolve, by the reason they give. */
 const PROBLEM_BLOCKERS: Partial<Record<MessageIds, LiftBlocker>> = {
+  privateName: "a private name",
   jsx: "JSX",
   lexicalThis: "lexical this or new.target",
   lexicalNewTarget: "lexical this or new.target",
@@ -352,19 +813,8 @@ function usesOwnReceiver(fn: FunctionNode, analysis: Analysis): boolean {
   if (fn.type === AST_NODE_TYPES.ArrowFunctionExpression) return false;
   const scope = analysis.sourceCode.scopeManager?.acquire(fn, true);
   if ((scope?.set.get("arguments")?.references.length ?? 0) > 0) return true;
-  let found = false;
-  const visit = (node: TSESTree.Node): void => {
-    if (found) return;
-    if (node !== fn && isFunctionNode(node) && node.type !== AST_NODE_TYPES.ArrowFunctionExpression) return;
-    if (node.type === AST_NODE_TYPES.ClassBody) return;
-    if (node.type === AST_NODE_TYPES.ThisExpression || (node.type === AST_NODE_TYPES.MetaProperty && node.meta.name === "new")) {
-      found = true;
-      return;
-    }
-    for (const child of childNodes(node, analysis.sourceCode.visitorKeys)) visit(child);
-  };
-  visit(fn.body);
-  return found;
+  // Its parameters' defaults, and a nested class's computed keys, read the function's `this` too.
+  return readsNewTarget(fn, analysis) || ownThisExpressions(fn, analysis).length > 0;
 }
 
 /**
@@ -413,6 +863,11 @@ function classify(reference: Reference, site: LiftSite, assumptions: LiftAssumpt
       direct: false,
       guarded: parent.type === AST_NODE_TYPES.UnaryExpression && parent.operator === "typeof",
     };
+  }
+  // A method's own class, by the name its body sees, is initialized before any of its methods can run, and is constant.
+  if (site.method && variable.scope.type === "class" && variable.defs.some((def) => def.node === site.method?.holder)) {
+    if (reference.isWrite()) return "writes a constant or import";
+    return { name, global: false, writable: false, guarded: false, direct: true, ownClass: true };
   }
   if (variable.scope.type !== "module" && variable.scope.type !== "global") return "not declared at module level";
   if (reference.isWrite() && !isReassignable(variable)) return "writes a constant or import";
@@ -508,9 +963,9 @@ function isReassignable(variable: TSESLint.Scope.Variable): boolean {
   );
 }
 
-/** A name not yet bound in the module, nor used as a global anywhere in it. */
-function freshName(base: string, analysis: Analysis, fn: FunctionNode): string {
-  const taken = new Set<string>();
+/** A name not yet bound in the module, nor used as a global anywhere in it, nor in `chosen`, which gets it. */
+function freshName(base: string, analysis: Analysis, fn: FunctionNode, chosen?: Set<string>): string {
+  const taken = new Set<string>(chosen);
   for (let scope = analysis.sourceCode.scopeManager?.acquire(fn) ?? null; scope; scope = scope.upper) {
     for (const name of scope.set.keys()) taken.add(name);
     for (const reference of scope.through) taken.add(reference.identifier.name);
@@ -518,8 +973,34 @@ function freshName(base: string, analysis: Analysis, fn: FunctionNode): string {
   for (const scope of analysis.sourceCode.scopeManager?.scopes ?? []) {
     if (scope.type === "module" || scope.type === "global") for (const name of scope.set.keys()) taken.add(name);
   }
-  if (!taken.has(base)) return base;
-  for (let i = 2; ; i++) if (!taken.has(`${base}${i}`)) return `${base}${i}`;
+  let name = base;
+  for (let i = 2; taken.has(name); i++) name = `${base}${i}`;
+  chosen?.add(name);
+  return name;
+}
+
+/**
+ * True for an accessor of a shared context the lift wrote: a member of
+ * `new (class { … })()`, an anonymous class of nothing but accessors.
+ */
+export function isContextAccessor(fn: FunctionNode): boolean {
+  const member = fn.parent;
+  if (member.type !== AST_NODE_TYPES.MethodDefinition || (member.kind !== "get" && member.kind !== "set")) return false;
+  const cls = member.parent.parent;
+  return (
+    cls.type === AST_NODE_TYPES.ClassExpression &&
+    !cls.id &&
+    !cls.superClass &&
+    cls.parent.type === AST_NODE_TYPES.NewExpression &&
+    cls.parent.callee === cls &&
+    cls.parent.arguments.length === 0 &&
+    cls.body.body.every((element) => element.type === AST_NODE_TYPES.MethodDefinition && (element.kind === "get" || element.kind === "set"))
+  );
+}
+
+function isSetter(fn: FunctionNode): boolean {
+  const parent = fn.parent;
+  return (parent.type === AST_NODE_TYPES.MethodDefinition || parent.type === AST_NODE_TYPES.Property) && parent.kind === "set";
 }
 
 /**
@@ -531,8 +1012,11 @@ export function isWrapper(fn: FunctionNode, sourceCode: SourceCode): boolean {
   let expression: TSESTree.Node = fn.body;
   if (fn.body.type === AST_NODE_TYPES.BlockStatement) {
     const [only, ...rest] = fn.body.body;
-    if (rest.length > 0 || only?.type !== AST_NODE_TYPES.ReturnStatement || !only.argument) return false;
-    expression = only.argument;
+    if (rest.length > 0 || !only) return false;
+    // A setter's wrapper calls its core without returning.
+    if (only.type === AST_NODE_TYPES.ReturnStatement && only.argument) expression = only.argument;
+    else if (only.type === AST_NODE_TYPES.ExpressionStatement && isSetter(fn)) expression = only.expression;
+    else return false;
   }
   if (expression.type !== AST_NODE_TYPES.CallExpression) return false;
   const callee = expression.callee;
@@ -573,7 +1057,186 @@ export function liftFix(
   const text = sourceCode.text;
   const base = indentOf(sourceCode, plan.statement);
   const unit = indentUnit(sourceCode, fn);
+  const edits = liftedEdits(plan, typescript);
+  const raw = (node: TSESTree.Node | undefined | null): string => (node ? text.slice(node.range[0], node.range[1]) : "");
 
+  // The core: same parameters and body, with lifted references read from `this`.
+  const params = applyEdits(text, parameterSpan(fn, sourceCode), edits);
+  const coreParams = typescript ? withLeadingParameters(params, [contextParameter(plan)]) : params;
+  const head = `${fn.async ? "async " : ""}function${fn.generator ? "*" : ""} ${plan.coreName}`;
+  const signature = `${raw(fn.typeParameters)}(${coreParams})${raw(fn.returnType)}`;
+  let body: string;
+  if (fn.body.type === AST_NODE_TYPES.BlockStatement) {
+    const { at, text: directive } = directiveInsertion(fn.body, sourceCode);
+    body = applyEdits(text, fn.body.range, [...edits, { range: [at, at], text: directive }]);
+  } else {
+    // Only arrows have expression bodies.
+    const arrow = fn as TSESTree.ArrowFunctionExpression;
+    body = `{\n${base}${unit}"use hermetic";\n${base}${unit}return ${expressionBody(arrow, fn.body, sourceCode, edits)};\n${base}}`;
+  }
+  const core = `${head}${signature} ${carriedComments(fn, sourceCode, base)}${body}`;
+
+  // The wrapper: same name, parameters and return type; forwards to the core.
+  const { params: wrapperParams, forwarded } = wrapperParameters(plan, raw, typescript);
+  const typeArguments = fn.typeParameters?.params.map((param) => param.name.name) ?? [];
+  const callee = typeArguments.length > 0 ? `(${plan.coreName}<${typeArguments.join(", ")}>)` : plan.coreName;
+  const call = `${callee}.call(${[contextArgument(plan), ...forwarded].join(", ")})`;
+  const wrapperSignature = `${raw(fn.typeParameters)}(${layoutParameters(wrapperParams, fn, sourceCode)})${raw(fn.returnType)}`;
+  const wrapper =
+    fn.type === AST_NODE_TYPES.ArrowFunctionExpression
+      ? `${wrapperSignature} => ${call}`
+      : `function${fn.type === AST_NODE_TYPES.FunctionDeclaration ? ` ${fn.id?.name ?? ""}` : ""}${wrapperSignature} {\n${base}${unit}return ${call};\n${base}}`;
+
+  // The shared context comes straight after the wrapper: nothing can call the wrapper in between.
+  const declarations = [contextDeclaration(plan, base, unit, typescript), core].filter((declaration) => declaration !== undefined);
+  const at = declarationSite(plan.statement, sourceCode);
+  return [
+    fixer.replaceText(fn, wrapper),
+    fixer.insertTextAfterRange([at, at], declarations.map((declaration) => `\n\n${base}${declaration}`).join("")),
+  ];
+}
+
+/**
+ * Splits every method a statement holds, in one fix: ESLint applies one fix
+ * to a range per pass, and the cores of all of them go after the statement.
+ * Each method becomes a wrapper that keeps its key, modifiers and signature,
+ * apart from `async` and `*`, which only the core needs. The wrapper calls
+ * the core with a context, its object, and its `arguments` when the core
+ * reads them. In the core the object is `self` and `arguments` is `args`,
+ * and with TypeScript a class's polymorphic `this` type is a type parameter,
+ * `Self`, that the wrapper passes `this` for.
+ */
+export function liftMethodsFix(
+  fixer: TSESLint.RuleFixer,
+  plans: readonly LiftPlan[],
+  sourceCode: SourceCode,
+  typescript: boolean,
+): TSESLint.RuleFix[] {
+  const [first] = plans;
+  if (!first) return [];
+  const base = indentOf(sourceCode, first.statement);
+  const fixes: TSESLint.RuleFix[] = [];
+  const declarations: string[] = [];
+  for (const plan of [...plans].sort((a, b) => a.fn.range[0] - b.fn.range[0])) {
+    const split = splitMethod(plan, sourceCode, typescript, base);
+    fixes.push(fixer.replaceText(plan.fn, split.wrapper), ...split.removals.map((range) => fixer.removeRange(range)));
+    declarations.push(...split.declarations);
+  }
+  const at = declarationSite(first.statement, sourceCode);
+  fixes.push(fixer.insertTextAfterRange([at, at], declarations.map((declaration) => `\n\n${base}${declaration}`).join("")));
+  return fixes;
+}
+
+function splitMethod(
+  plan: LiftPlan,
+  sourceCode: SourceCode,
+  typescript: boolean,
+  base: string,
+): { wrapper: string; removals: [number, number][]; declarations: string[] } {
+  const { fn } = plan;
+  const method = plan.method;
+  if (!method) throw new Error("Not a method's plan");
+  const text = sourceCode.text;
+  const raw = (node: TSESTree.Node | undefined | null): string => (node ? text.slice(node.range[0], node.range[1]) : "");
+  const memberIndent = indentOf(sourceCode, method.member);
+  const unit = indentUnit(sourceCode, fn);
+  // The core sits at the statement's indentation, so its lines lose what the member's add to it.
+  const prefix = memberIndent.startsWith(base) ? memberIndent.slice(base.length) : "";
+  const span = parameterSpan(fn, sourceCode);
+
+  const edits = liftedEdits(plan, typescript);
+  for (const node of method.thisExpressions) edits.push({ range: node.range, text: method.selfName });
+  for (const identifier of method.argumentReads) {
+    edits.push({ range: identifier.range, text: isShorthandValue(identifier) ? `arguments: ${method.argumentsName}` : `${method.argumentsName}` });
+  }
+  for (const type of method.thisTypes) {
+    if (!isThisPredicate(type)) {
+      edits.push({ range: type.range, text: method.selfParameter?.name ?? method.selfName });
+      continue;
+    }
+    // `this is T` becomes `self is Self & (T)`: a parameter's predicate must narrow the parameter's own type.
+    edits.push({ range: type.range, text: method.selfName });
+    const predicate = type.parent as TSESTree.TSTypePredicate;
+    if (predicate.typeAnnotation && method.selfType !== undefined) {
+      const [start, end] = predicate.typeAnnotation.typeAnnotation.range;
+      edits.push({ range: [start, start], text: `${method.selfType} & (` }, { range: [end, end], text: ")" });
+    }
+  }
+  if (method.thisParameter) {
+    // `self` takes the place of the method's `this` parameter.
+    const after = sourceCode.getTokenAfter(method.thisParameter);
+    const next = after?.value === "," ? sourceCode.getTokenAfter(after, { includeComments: true }) : undefined;
+    edits.push({ range: [method.thisParameter.range[0], next ? Math.min(next.range[0], span[1]) : method.thisParameter.range[1]], text: "" });
+  }
+  const parts = [fn.typeParameters, fn.returnType].filter((part) => part !== undefined);
+  const replaced = [...edits];
+  for (const at of codeLineStarts(sourceCode, fn, [span, fn.body.range, ...parts.map((part) => part.range)])) {
+    if (!prefix || !text.startsWith(prefix, at) || replaced.some(({ range }) => range[0] <= at && at < range[1])) continue;
+    edits.push({ range: [at, at + prefix.length], text: "" });
+  }
+  const dedent = (inserted: string): string => (prefix ? inserted.replace(new RegExp(`(${LINE_BREAK.source})${prefix}`, "g"), "$1") : inserted);
+
+  // The core: the object, then `arguments`, come before the method's own parameters.
+  const leading = [
+    ...(typescript ? [contextParameter(plan)] : []),
+    method.selfType === undefined ? method.selfName : `${method.selfName}: ${method.selfType}`,
+    ...(method.argumentsName === undefined ? [] : [typescript ? `${method.argumentsName}: IArguments` : method.argumentsName]),
+  ];
+  const coreParams = withLeadingParameters(applyEdits(text, span, edits), leading);
+  let typeParameters = fn.typeParameters ? applyEdits(text, fn.typeParameters.range, edits) : "";
+  if (method.selfParameter) {
+    const own = typeParameters.slice(1, -1).trim().replace(/,$/, "");
+    typeParameters = `<${[...method.selfParameter.declarations, ...(own ? [own] : [])].join(", ")}>`;
+  }
+  const returnType = fn.returnType ? applyEdits(text, fn.returnType.range, edits) : "";
+  const body = fn.body as TSESTree.BlockStatement;
+  const directive = directiveInsertion(body, sourceCode);
+  const block = applyEdits(text, body.range, [...edits, { range: [directive.at, directive.at], text: dedent(directive.text) }]);
+  const head = `${fn.async ? "async " : ""}function${fn.generator ? "*" : ""} ${plan.coreName}`;
+  const core = `${head}${typeParameters}(${coreParams})${returnType} ${carriedComments(fn, sourceCode, base)}${block}`;
+
+  // The wrapper: same parameters and return type; passes its object to the core.
+  const { params: wrapperParams, forwarded } = wrapperParameters(plan, raw, typescript);
+  const typeArguments = [...(method.selfParameter?.arguments ?? []), ...(fn.typeParameters?.params.map((param) => param.name.name) ?? [])];
+  const callee = typeArguments.length > 0 ? `(${plan.coreName}<${typeArguments.join(", ")}>)` : plan.coreName;
+  const passed = [contextArgument(plan), "this", ...(method.argumentsName === undefined ? [] : ["arguments"]), ...forwarded];
+  const call = `${callee}.call(${passed.join(", ")})`;
+  const wrapper = `${raw(fn.typeParameters)}(${layoutParameters(wrapperParams, fn, sourceCode)})${raw(fn.returnType)} {\n${memberIndent}${unit}${method.kind === "set" ? "" : "return "}${call};\n${memberIndent}}`;
+
+  const declarations = [contextDeclaration(plan, base, unit, typescript), core].filter((declaration) => declaration !== undefined);
+  return { wrapper, removals: modifierRemovals(plan, sourceCode), declarations };
+}
+
+/** The `async` and `*` before a method's key, each with the space after it. */
+function modifierRemovals(plan: LiftPlan, sourceCode: SourceCode): [number, number][] {
+  const { fn, method } = plan;
+  if (!method || (!fn.async && !fn.generator)) return [];
+  const key = method.member.key;
+  let token = method.member.computed ? sourceCode.getTokenBefore(key, { filter: (candidate) => candidate.value === "[" }) : sourceCode.getFirstToken(key);
+  const removals: [number, number][] = [];
+  const remove = (modifier: TSESTree.Token): void => {
+    const next = sourceCode.getTokenAfter(modifier, { includeComments: true });
+    removals.push([modifier.range[0], next ? next.range[0] : modifier.range[1]]);
+  };
+  if (fn.generator && token) {
+    const star = sourceCode.getTokenBefore(token);
+    if (star?.value === "*") {
+      remove(star);
+      token = star;
+    }
+  }
+  if (fn.async && token) {
+    const keyword = sourceCode.getTokenBefore(token);
+    if (keyword?.value === "async") remove(keyword);
+  }
+  return removals;
+}
+
+/**
+ * The edits that make the core read each lifted name from `this`, and, with
+ * TypeScript, keep the type of each literal a declaration would widen.
+ */
+function liftedEdits(plan: LiftPlan, typescript: boolean): Edit[] {
   const edits: Edit[] = plan.identifiers.map((identifier) => ({
     range: identifier.range,
     text: isShorthandValue(identifier)
@@ -588,41 +1251,54 @@ export function liftFix(
       if (site) edits.push({ range: [site.after.range[1], site.after.range[1]], text: `: ${site.type}` });
     }
   }
-  const raw = (node: TSESTree.Node | undefined | null): string => (node ? text.slice(node.range[0], node.range[1]) : "");
+  return edits;
+}
 
-  // The core: same parameters and body, with lifted references read from `this`.
-  const lifted = [...plan.lifted.values()];
-  const contextType = `this: { ${lifted.map((entry) => `${entry.name}: ${contextMemberType(entry)}`).join("; ")} }`;
-  const params = applyEdits(text, parameterSpan(fn, sourceCode), edits);
-  const coreParams = typescript ? withThisParameter(params, contextType) : params;
-  const head = `${fn.async ? "async " : ""}function${fn.generator ? "*" : ""} ${plan.coreName}`;
-  const signature = `${raw(fn.typeParameters)}(${coreParams})${raw(fn.returnType)}`;
-  let body: string;
-  if (fn.body.type === AST_NODE_TYPES.BlockStatement) {
-    const { at, text: directive } = directiveInsertion(fn.body, sourceCode);
-    body = applyEdits(text, fn.body.range, [...edits, { range: [at, at], text: directive }]);
-  } else {
-    // Only arrows have expression bodies.
-    const arrow = fn as TSESTree.ArrowFunctionExpression;
-    body = `{\n${base}${unit}"use hermetic";\n${base}${unit}return ${expressionBody(arrow, fn.body, sourceCode, edits)};\n${base}}`;
-  }
-  // Comments between the parts copied above, such as one before `=>`, go before the core's body.
+/** The core's `this` parameter, which types its context. */
+function contextParameter(plan: LiftPlan): string {
+  return `this: { ${[...plan.lifted.values()].map((entry) => `${entry.name}: ${contextMemberType(entry)}`).join("; ")} }`;
+}
+
+/** What the wrapper passes as the core's `this`: the shared context, or an object literal of the values. */
+function contextArgument(plan: LiftPlan): string {
+  return plan.contextName ?? `{ ${[...plan.lifted.keys()].join(", ")} }`;
+}
+
+/** The shared context's declaration, when the plan has one. */
+function contextDeclaration(plan: LiftPlan, base: string, unit: string, typescript: boolean): string | undefined {
+  if (!plan.contextName) return undefined;
+  const members = [...plan.lifted.values()].flatMap((entry) => contextMembers(entry, typescript)).map((line) => `${base}${unit}${line}`);
+  return [`const ${plan.contextName} = new (class {`, ...members, `${base}})();`].join("\n");
+}
+
+/** Comments between the parts of the signature the core copies, such as one before `=>`, which go before its body. */
+function carriedComments(fn: FunctionNode, sourceCode: SourceCode, indent: string): string {
   const copied: (readonly [number, number])[] = [parameterSpan(fn, sourceCode)];
   for (const part of [fn.typeParameters, fn.returnType]) if (part) copied.push(part.range);
   copied.push(fn.body.type === AST_NODE_TYPES.BlockStatement ? fn.body.range : [arrowToken(fn as TSESTree.ArrowFunctionExpression, sourceCode).range[1], fn.range[1]]);
-  const notes = renderComments(looseComments(fn, copied, sourceCode), sourceCode, base);
-  const core = `${head}${signature} ${notes}${body}`;
+  return renderComments(looseComments(fn, copied, sourceCode), sourceCode, indent);
+}
 
-  // The wrapper: same name, parameters and return type; forwards to the core.
+/**
+ * The wrapper's parameters, and what it passes the core for each. A pattern
+ * is passed whole, under a generated name, for the core to take apart; a
+ * method's `this` parameter stays in its signature and is passed as its object.
+ */
+function wrapperParameters(
+  plan: LiftPlan,
+  raw: (node: TSESTree.Node | undefined | null) => string,
+  typescript: boolean,
+): { params: string[]; forwarded: string[] } {
+  const { fn } = plan;
   const forwarded: string[] = [];
   const reserved = new Set([...plan.lifted.keys(), ...fn.params.flatMap((param) => (param.type === AST_NODE_TYPES.Identifier ? [param.name] : []))]);
-  const wrapperParams = fn.params.map((param, index) => {
+  const params = fn.params.map((param, index) => {
     let generated = `arg${index}`;
     while (reserved.has(generated)) generated = `_${generated}`;
     reserved.add(generated);
     switch (param.type) {
       case AST_NODE_TYPES.Identifier:
-        forwarded.push(param.name);
+        if (param !== plan.method?.thisParameter) forwarded.push(param.name);
         return raw(param);
       case AST_NODE_TYPES.AssignmentPattern: {
         // Keeping the default keeps its inferred type and the function's length; it runs once either way.
@@ -645,27 +1321,7 @@ export function liftFix(
       }
     }
   });
-  const typeArguments = fn.typeParameters?.params.map((param) => param.name.name) ?? [];
-  const callee = typeArguments.length > 0 ? `(${plan.coreName}<${typeArguments.join(", ")}>)` : plan.coreName;
-  const context = plan.contextName ?? `{ ${lifted.map((entry) => entry.name).join(", ")} }`;
-  const call = `${callee}.call(${[context, ...forwarded].join(", ")})`;
-  const wrapperSignature = `${raw(fn.typeParameters)}(${layoutParameters(wrapperParams, fn, sourceCode)})${raw(fn.returnType)}`;
-  const wrapper =
-    fn.type === AST_NODE_TYPES.ArrowFunctionExpression
-      ? `${wrapperSignature} => ${call}`
-      : `function${fn.type === AST_NODE_TYPES.FunctionDeclaration ? ` ${fn.id?.name ?? ""}` : ""}${wrapperSignature} {\n${base}${unit}return ${call};\n${base}}`;
-
-  // The shared context comes straight after the wrapper: nothing can call the wrapper in between.
-  const declarations = [core];
-  if (plan.contextName) {
-    const members = lifted.flatMap((entry) => contextMembers(entry, typescript)).map((line) => `${base}${unit}${line}`);
-    declarations.unshift([`const ${plan.contextName} = new (class {`, ...members, `${base}})();`].join("\n"));
-  }
-  const at = declarationSite(plan.statement, sourceCode);
-  return [
-    fixer.replaceText(fn, wrapper),
-    fixer.insertTextAfterRange([at, at], declarations.map((declaration) => `\n\n${base}${declaration}`).join("")),
-  ];
+  return { params, forwarded };
 }
 
 /**
@@ -708,11 +1364,11 @@ function layoutParameters(params: readonly string[], fn: FunctionNode, sourceCod
   return `\n${params.map((param, index) => `${indent}${param}${index < params.length - 1 ? "," : trailing}`).join("\n")}\n${closing}`;
 }
 
-/** Adds the context parameter in front of the others, following their layout. */
-function withThisParameter(params: string, contextType: string): string {
-  if (params.trim() === "") return contextType;
+/** Adds parameters in front of the others, following their layout. */
+function withLeadingParameters(params: string, added: readonly string[]): string {
+  if (params.trim() === "") return added.join(", ");
   const leading = /^\s*/.exec(params)?.[0] ?? "";
-  return LINE_BREAK.test(leading) ? `${leading}${contextType},${params}` : `${contextType}, ${params.slice(leading.length)}`;
+  return LINE_BREAK.test(leading) ? `${leading}${added.join(`,${leading}`)},${params}` : `${added.join(", ")}, ${params.slice(leading.length)}`;
 }
 
 /**

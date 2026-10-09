@@ -1,6 +1,6 @@
 import { AST_NODE_TYPES, AST_TOKEN_TYPES, type TSESLint, type TSESTree } from "@typescript-eslint/utils";
 import { analyze, createAnalysis, type HermeticSettings, SETTINGS_SCHEMA } from "../analysis.ts";
-import { isWrapper, liftFix, planLift } from "../lift.ts";
+import { isContextAccessor, isWrapper, liftFix, liftMethodsFix, type LiftPlan, planLift } from "../lift.ts";
 import {
   constructedClass,
   directiveInsertion,
@@ -8,16 +8,16 @@ import {
   functionName,
   isFunctionNode,
   isMarkedHermetic,
-  isMethod,
 } from "../marking.ts";
 import { createRule } from "./create-rule.ts";
 
 export interface PreferHermeticOptions extends HermeticSettings {
   /**
-   * Also rewrite functions whose only hidden inputs are module-level values
-   * or globals: the body moves into a new hermetic function that receives them
-   * through `this`, and the original becomes a wrapper that passes them in,
-   * keeping its name, signature and export. Off by default.
+   * Also rewrite functions and methods whose only hidden inputs are
+   * module-level values or globals: the body moves into a hermetic core that
+   * reads them from `this`, and the original becomes a wrapper that passes
+   * them in, keeping its name, signature and export. A method's wrapper also
+   * passes its object. Off by default.
    */
   lift?: boolean;
   /**
@@ -45,7 +45,10 @@ export const preferHermetic = createRule<[PreferHermeticOptions], MessageIds>({
         type: "object",
         properties: {
           ...SETTINGS_SCHEMA,
-          lift: { type: "boolean", description: "Rewrite functions whose only hidden inputs are module-level values or globals, passing them in through 'this'." },
+          lift: {
+            type: "boolean",
+            description: "Rewrite functions and methods whose only hidden inputs are module-level values or globals, passing them in through 'this'.",
+          },
           importsSettled: {
             type: "boolean",
             description: "With lift, treat named imports as initialized before any function that reads them runs, and unchanged while it runs.",
@@ -57,13 +60,26 @@ export const preferHermetic = createRule<[PreferHermeticOptions], MessageIds>({
     defaultOptions: [{}],
     messages: {
       alreadyHermetic: "'{{fn}}' is already hermetic. Mark it so it stays that way.",
-      liftable: "'{{fn}}' reads {{names}} from outside its inputs. Its lift fix passes {{names}} in through 'this', making it hermetic.",
+      liftable: "'{{fn}}' reads {{names}} from outside its inputs. Its lift fix moves its body into a hermetic core, which reads {{names}} from 'this'.",
     },
   },
   create(context, [options]) {
     const analysis = createAnalysis(context, options);
     const sourceCode = context.sourceCode;
     const typescript = /\.[cm]?tsx?$/.test(context.filename);
+    // Names the module's lifts have chosen, so no two cores get the same one.
+    const taken = new Set<string>();
+    // The methods to lift, by the statement that holds them: one fix splits them all.
+    const methods = new Map<TSESTree.Node, { plan: LiftPlan; name: string }[]>();
+    const reportLift = (plan: LiftPlan, name: string, fix: TSESLint.ReportFixFunction): void => {
+      const names = [...plan.lifted.keys()];
+      context.report({
+        node: nameNode(plan.fn),
+        messageId: "liftable",
+        data: { fn: name, names: names.length > 4 ? `${names.slice(0, 4).join(", ")} and ${names.length - 4} more` : names.join(", ") },
+        fix,
+      });
+    };
     return {
       ":function"(node: FunctionNode) {
         if (!isCandidate(node) || isMarkedHermetic(node, sourceCode)) return;
@@ -78,17 +94,23 @@ export const preferHermetic = createRule<[PreferHermeticOptions], MessageIds>({
           });
           return;
         }
-        // The lift splits functions; a method's `this` is taken by its object, so it has nowhere to put what it lifts yet.
-        if (!options.lift || isMethod(node) || isWrapper(node, sourceCode)) return;
-        const plan = planLift(node, problems, analysis, { importsSettled: options.importsSettled === true });
+        // What the lift wrote is binding code already: lifting it again would never settle.
+        if (!options.lift || isWrapper(node, sourceCode) || isContextAccessor(node)) return;
+        const plan = planLift(node, problems, analysis, { importsSettled: options.importsSettled === true }, taken);
         if (!plan) return;
-        const names = [...plan.lifted.keys()];
-        context.report({
-          node: nameNode(node),
-          messageId: "liftable",
-          data: { fn: name, names: names.length > 4 ? `${names.slice(0, 4).join(", ")} and ${names.length - 4} more` : names.join(", ") },
-          fix: (fixer) => liftFix(fixer, plan, sourceCode, typescript),
-        });
+        if (plan.method) {
+          const group = methods.get(plan.statement) ?? [];
+          group.push({ plan, name });
+          methods.set(plan.statement, group);
+          return;
+        }
+        reportLift(plan, name, (fixer) => liftFix(fixer, plan, sourceCode, typescript));
+      },
+      "Program:exit"() {
+        for (const group of methods.values()) {
+          const plans = group.map((entry) => entry.plan);
+          for (const { plan, name } of group) reportLift(plan, name, (fixer) => liftMethodsFix(fixer, plans, sourceCode, typescript));
+        }
       },
     };
   },

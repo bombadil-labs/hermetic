@@ -88,3 +88,34 @@ export function renderComments(
     })
     .join("");
 }
+
+/**
+ * The offsets in `ranges` where a line of code starts: just after a line
+ * break, outside the text of a string or template literal in `node`, on a
+ * line with more than whitespace. Code that moves in or out of a class
+ * indents or dedents these lines and no others.
+ */
+export function codeLineStarts(
+  sourceCode: Readonly<TSESLint.SourceCode>,
+  node: TSESTree.Node,
+  ranges: readonly (readonly [number, number])[],
+): number[] {
+  const text = sourceCode.text;
+  const literals = sourceCode
+    .getTokens(node)
+    .filter((token) => token.type === "Template" || token.type === "String" || token.type === "JSXText");
+  const starts: number[] = [];
+  for (const [start, end] of ranges) {
+    const lineBreak = new RegExp(LINE_BREAK.source, "g");
+    lineBreak.lastIndex = start;
+    for (let match = lineBreak.exec(text); match && match.index < end; match = lineBreak.exec(text)) {
+      const at = match.index + match[0].length;
+      if (at > end || literals.some((token) => token.range[0] < at && at < token.range[1])) continue;
+      const next = new RegExp(LINE_BREAK.source, "g");
+      next.lastIndex = at;
+      const lineEnd = next.exec(text)?.index ?? text.length;
+      if (text.slice(at, lineEnd).trim() !== "") starts.push(at);
+    }
+  }
+  return starts;
+}

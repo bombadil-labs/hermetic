@@ -104,6 +104,53 @@ describe("unlift undoes the lift exactly", () => {
       `const R = 1;`,
     ].join("\n"),
     "Windows line breaks": [`const R = 1;`, `export function f(a: number) {`, `  return a * R;`, `}`, `export const g = () => R;`].join("\r\n"),
+    "a class's methods, accessors and statics, indented back into it": [
+      `const R = 2;`,
+      `export class Foo<A> {`,
+      `  constructor(readonly a: A) {}`,
+      `  scale<K extends string>(x: number, key: K): this {`,
+      `    const text = \`a template`,
+      `that keeps \${key} as it is\`;`,
+      `    return R && text ? this : this;`,
+      `  }`,
+      `  isEmpty(): this is Foo<never> {`,
+      `    return this.a === undefined && R > 0;`,
+      `  }`,
+      `  get doubled() /* note */ {`,
+      `    return [this.a, R, { arguments }];`,
+      `  }`,
+      `  set doubled(v: unknown[]) {`,
+      `    console.log(v, this.a);`,
+      `  }`,
+      `  static create(n: number) {`,
+      `    return new Foo(n * R);`,
+      `  }`,
+      `  static later() {`,
+      `    return Foo.name + LATER;`,
+      `  }`,
+      `  async *items(`,
+      `    this: Foo<A>,`,
+      `    n: number,`,
+      `  ) {`,
+      `    for (let i = 0; i < n; i++) yield i * R + arguments.length;`,
+      `  }`,
+      `  nested() {`,
+      `    return new (class Inner { x = this; [R ? "m" : "n"]() { return this; } })().x !== undefined && R > 0;`,
+      `  }`,
+      `}`,
+      `const LATER = 1;`,
+    ].join("\n"),
+    "an object literal's methods": [
+      `const R = 1;`,
+      `export const proto = {`,
+      `  size(this: { n: number }) {`,
+      `    return this.n * R;`,
+      `  },`,
+      `  async [Symbol.asyncIterator](): AsyncGenerator<number> {`,
+      `    return () => this.size === undefined || R;`,
+      `  },`,
+      `};`,
+    ].join("\n"),
   };
 
   for (const [name, code] of Object.entries(modules)) {
@@ -121,6 +168,34 @@ describe("unlift undoes the lift exactly", () => {
     const lifted = fix(code, "counter.js", true);
     expect(lifted).toContain("bumpContext");
     expect(unlift(lifted, "counter.js").code).toBe(fix(code, "counter.js", false));
+  });
+
+  it("plain JavaScript methods", () => {
+    const code = [
+      `let count = 0;`,
+      `export class Counter {`,
+      `  bump(by = 1) {`,
+      `    count += by;`,
+      `    return [this, count, Counter.instances];`,
+      `  }`,
+      `  get total() {`,
+      `    return count;`,
+      `  }`,
+      `  set total(v) {`,
+      `    count = v;`,
+      `  }`,
+      `}`,
+      `export default {`,
+      `  greet(who) {`,
+      `    return \`\${this.name} greets \${who}\` + count + arguments.length;`,
+      `  },`,
+      `};`,
+    ].join("\n");
+    const lifted = fix(code, "counter.js", true);
+    expect(lifted).toContain("CounterBumpContext");
+    const result = unlift(lifted, "counter.js");
+    expect(result.unlifted).toEqual(["Counter.bump", "Counter.total", "Counter.total", "greet"]);
+    expect(result.code).toBe(fix(code, "counter.js", false));
   });
 
   it("JavaScript whose types were stripped after the lift", () => {
